@@ -1,0 +1,38 @@
+name: test
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+    branches:
+      - "**"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.21"
+
+      - name: Install dependencies
+        run: go mod tidy
+
+      - name: Run tests
+        run: |
+          go test -v -coverprofile=coverage.out $(go list ./... | grep -v "examples")
+          go tool cover -func=coverage.out
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-results
+          path: |
+            **/coverage.out
