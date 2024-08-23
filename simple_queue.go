@@ -274,14 +274,13 @@ LOOP:
 
 func (q *Queue[T]) writeFile(data []byte) error {
 	offset := 0
+	stat, err := q.queueFile.Stat()
+	if err != nil {
+		return err
+	}
+	fileSize := uint64(stat.Size())
+	space := q.maxFileSize - fileSize
 	for offset < len(data) {
-		stat, err := q.queueFile.Stat()
-		if err != nil {
-			return err
-		}
-		fileSize := uint64(stat.Size())
-		space := q.maxFileSize - fileSize
-
 		writeSize := uint64(len(data) - offset)
 		if writeSize > space {
 			writeSize = space
@@ -291,14 +290,20 @@ func (q *Queue[T]) writeFile(data []byte) error {
 		if err != nil {
 			return err
 		}
-
+		space -= writeSize
 		offset += int(writeSize)
 
-		if fileSize+writeSize >= q.maxFileSize {
+		if space == 0 {
 			err = q.rotateFile()
 			if err != nil {
 				return err
 			}
+			stat, err = q.queueFile.Stat()
+			if err != nil {
+				return err
+			}
+			fileSize = uint64(stat.Size())
+			space = q.maxFileSize - fileSize
 		}
 	}
 	return nil
