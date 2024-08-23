@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -41,7 +42,7 @@ func NewGroupQueue[T any](name string, opts ...Option) (*GroupQueue[T], error) {
 		}
 	}
 
-	var fileDir = "/tmp"
+	var fileDir = "/tmp/ffq"
 	if options.fileDir != nil {
 		fileDir = *options.fileDir
 	}
@@ -94,7 +95,7 @@ func NewGroupQueue[T any](name string, opts ...Option) (*GroupQueue[T], error) {
 func (gq *GroupQueue[T]) addQueue(name string) error {
 	q, err := NewQueue[T](
 		name,
-		WithFileDir(gq.fileDir),
+		WithFileDir(filepath.Join(gq.fileDir, name)),
 		WithPageSize(gq.pageSize),
 		WithQueueSize(gq.queueSize),
 		WithEnqueueWriteSize(gq.enqueueWriteSize),
