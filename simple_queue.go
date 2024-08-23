@@ -46,7 +46,7 @@ func NewQueue[T any](name string, opts ...Option) (*Queue[T], error) {
 		}
 	}
 
-	var fileDir = "/tmp"
+	var fileDir = "/tmp/ffq"
 	if options.fileDir != nil {
 		fileDir = *options.fileDir
 	}
@@ -70,9 +70,9 @@ func NewQueue[T any](name string, opts ...Option) (*Queue[T], error) {
 		pageSize = *options.pageSize
 	}
 
-	var dataFixedLength uint64 = 4 * 1024
+	var dataFixedLength uint64 = 4 * 1024 * uint64(enqueueWriteSize)
 	if options.dataFixedLength != nil {
-		dataFixedLength = *options.dataFixedLength * 1024
+		dataFixedLength = *options.dataFixedLength * 1024 * uint64(enqueueWriteSize)
 	}
 
 	var jsonEncoder func(v any) ([]byte, error) = json.Marshal
@@ -86,13 +86,14 @@ func NewQueue[T any](name string, opts ...Option) (*Queue[T], error) {
 	}
 
 	maxFileSize := queueSize * dataFixedLength
-	maxIndexSize := queueSize * uint64(pageSize)
+	maxIndexSize := queueSize * uint64(pageSize) * uint64(enqueueWriteSize)
 
 	queue := make(chan *Message[T], queueSize)
 
 	// open index file
 	indexFilePath := filepath.Join(fileDir, indexFilename)
 	tailIndex, err := readIndex(indexFilePath)
+	headIndex := tailIndex + 1
 	if err != nil {
 		return nil, err
 	}
@@ -100,7 +101,8 @@ func NewQueue[T any](name string, opts ...Option) (*Queue[T], error) {
 	if err != nil {
 		return nil, err
 	}
-	tailPosition := tailIndex * dataFixedLength
+
+	startPosition := (headIndex / uint64(enqueueWriteSize)) * dataFixedLength
 
 	q := Queue[T]{
 		name:             name,
@@ -112,14 +114,14 @@ func NewQueue[T any](name string, opts ...Option) (*Queue[T], error) {
 		maxFileSize:      maxFileSize,
 		maxIndexSize:     maxIndexSize,
 		queue:            queue,
-		headIndex:        tailIndex,
+		headIndex:        headIndex,
 		indexFile:        indexFile,
 		jsonEncoder:      jsonEncoder,
 		jsonDecoder:      jsonDecoder,
 	}
 
 	go func() {
-		q.initialize(tailPosition)
+		q.initialize(startPosition)
 	}()
 
 	return &q, nil
@@ -128,7 +130,9 @@ func NewQueue[T any](name string, opts ...Option) (*Queue[T], error) {
 func (q *Queue[T]) Enqueue(data *T) error {
 	// write queue file
 	var err error
-	jsonData, err := q.jsonEncoder([]*T{data})
+	dataWithNil := make([]*T, q.enqueueWriteSize)
+	dataWithNil[0] = data
+	jsonData, err := q.jsonEncoder(dataWithNil)
 	if err != nil {
 		return err
 	}
@@ -137,7 +141,7 @@ func (q *Queue[T]) Enqueue(data *T) error {
 
 	// write queue channel
 	q.queue <- &Message[T]{index: q.headIndex, data: data}
-	q.headIndex++
+	q.headIndex += uint64(q.enqueueWriteSize)
 	if q.headIndex == q.maxIndexSize {
 		q.headIndex = 0
 	}
@@ -160,15 +164,23 @@ func (q *Queue[T]) BulkEnqueue(data []*T) error {
 		if l < i+q.enqueueWriteSize {
 			jsonData, err = q.jsonEncoder(data[i : i+q.enqueueWriteSize])
 		} else {
-			jsonData, err = q.jsonEncoder(data[i:l])
+			// create include null data
+			dataWithNil := make([]*T, q.enqueueWriteSize)
+			copy(dataWithNil, data[i:l])
+			jsonData, err = q.jsonEncoder(dataWithNil)
 		}
 		if err != nil {
 			return err
 		}
 		copy(paddedData[uint64(i)*q.dataFixedLength:], jsonData)
-		for j := i; j < i; j++ {
-			q.queue <- &Message[T]{index: q.headIndex, data: data[j]}
-			q.headIndex++
+		for j := i; j < i+q.enqueueWriteSize; j++ {
+			if j < l {
+				q.queue <- &Message[T]{index: q.headIndex, data: data[j]}
+				q.headIndex++
+			} else {
+				q.headIndex += uint64(i + q.enqueueWriteSize - j)
+				break
+			}
 		}
 		if q.headIndex == q.maxIndexSize {
 			q.headIndex = 0
@@ -347,14 +359,16 @@ func (q *Queue[T]) Length() int {
 	return len(q.queue)
 }
 
-func (q *Queue[T]) initialize(tailPosition uint64) {
+func (q *Queue[T]) initialize(startPosition uint64) {
 	var (
 		err       error
 		queueFile *os.File
 	)
 	buffer := make([]byte, q.dataFixedLength)
+	startIndex := startPosition / q.dataFixedLength * uint64(q.enqueueWriteSize)
+	isStart := true
 	for {
-		currentPage := int(tailPosition / q.maxFileSize)
+		currentPage := int(startPosition / q.maxFileSize)
 		if currentPage == q.pageSize {
 			currentPage = 0
 		}
@@ -369,7 +383,7 @@ func (q *Queue[T]) initialize(tailPosition uint64) {
 			}
 			q.queueFile = queueFile
 			q.currentPage = currentPage
-			q.headIndex = uint64(currentPage) * q.queueSize
+			q.headIndex = uint64(currentPage) * q.queueSize * uint64(q.enqueueWriteSize)
 			return
 		}
 
@@ -378,8 +392,8 @@ func (q *Queue[T]) initialize(tailPosition uint64) {
 		if err != nil {
 			panic(fmt.Sprintf("could not open file, %s, %v", queueFilepath, err))
 		}
-		pageTailPosition := tailPosition % q.maxFileSize
-		_, err = queueFile.Seek(int64(pageTailPosition), io.SeekStart)
+		pageStartPosition := startPosition % q.maxFileSize
+		_, err = queueFile.Seek(int64(pageStartPosition), io.SeekStart)
 		if err != nil {
 			panic(fmt.Sprintf("could not seek file, %s, %v", queueFilepath, err))
 		}
@@ -396,15 +410,27 @@ func (q *Queue[T]) initialize(tailPosition uint64) {
 			if err != nil {
 				panic(fmt.Sprintf("could not UnMarshal data, %s, %v", string(buffer), err))
 			}
-			for _, d := range data {
-				q.queue <- &Message[T]{index: q.headIndex, data: d}
-				q.headIndex++
-				tailPosition += q.dataFixedLength
+			if isStart {
+				for _, d := range data[q.headIndex-startIndex:] {
+					if d != nil {
+						q.queue <- &Message[T]{index: q.headIndex, data: d}
+					}
+					q.headIndex++
+				}
+				isStart = false
+			} else {
+				for _, d := range data {
+					if d != nil {
+						q.queue <- &Message[T]{index: q.headIndex, data: d}
+					}
+					q.headIndex++
+				}
+				startPosition += q.dataFixedLength
 			}
 		}
 
 		// check next file
-		nextPage := int(tailPosition / q.maxFileSize)
+		nextPage := int(startPosition / q.maxFileSize)
 		if currentPage == nextPage {
 			break
 		}
