@@ -8,7 +8,7 @@ import (
 func TestWithFileDir(t *testing.T) {
 	input := "/tmp"
 	var expectRet error = nil
-	expectVal := input
+	expectedVal := input
 
 	var options options
 	f := WithFileDir(input)
@@ -17,54 +17,54 @@ func TestWithFileDir(t *testing.T) {
 		t.Fatalf("Failed test: expectRet: %v, actualRet: %v", expectRet, actualRet)
 	}
 	actualVal := options.fileDir
-	if *actualVal != expectVal {
-		t.Fatalf("Failed test: expectVal: %v, actualVal: %v", expectVal, actualVal)
+	if *actualVal != expectedVal {
+		t.Fatalf("Failed test: expectedVal: %v, actualVal: %v", expectedVal, actualVal)
 	}
 }
 
 func TestWithQueueSize(t *testing.T) {
-	testcases := []struct {
-		name      string
-		input     uint64
-		expectRet string
-		expectVal uint64
+	tests := []struct {
+		name        string
+		input       uint64
+		expectRet   string
+		expectedVal uint64
 	}{
 		{
-			name:      "queue size can set",
-			input:     16,
-			expectRet: "",
-			expectVal: 16,
+			name:        "queue size can set",
+			input:       16,
+			expectRet:   "",
+			expectedVal: 16,
 		},
 		{
-			name:      "queue size cannot set with less than 1",
-			input:     0,
-			expectRet: "queueSize must be set to greater than 0",
-			expectVal: 0, // nil
+			name:        "queue size cannot set with less than 1",
+			input:       0,
+			expectRet:   "queueSize must be set to greater than 0",
+			expectedVal: 0, // nil
 		},
 	}
 
-	for _, tc := range testcases {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			var options options
-			f := WithQueueSize(tc.input)
+			f := WithQueueSize(tt.input)
 			actualRet := f(&options)
 			if actualRet == nil {
-				if tc.expectRet != "" {
-					t.Fatalf("Failed test: %s, expectRet: %v, actualRet: %v", tc.name, tc.expectRet, actualRet)
+				if tt.expectRet != "" {
+					t.Fatalf("Failed test: %s, expectRet: %v, actualRet: %v", tt.name, tt.expectRet, actualRet)
 				}
 			} else {
-				if !strings.Contains(actualRet.Error(), tc.expectRet) {
-					t.Fatalf("Failed test: %s, expectRet: %v, actualRet: %v", tc.name, tc.expectRet, actualRet)
+				if !strings.Contains(actualRet.Error(), tt.expectRet) {
+					t.Fatalf("Failed test: %s, expectRet: %v, actualRet: %v", tt.name, tt.expectRet, actualRet)
 				}
 			}
 			actualVal := options.queueSize
 			if actualVal == nil {
-				if tc.expectVal != 0 {
-					t.Fatalf("Failed test: %s, expectVal: %v, actualVal: %v", tc.name, tc.expectVal, actualVal)
+				if tt.expectedVal != 0 {
+					t.Fatalf("Failed test: %s, expectedVal: %v, actualVal: %v", tt.name, tt.expectedVal, actualVal)
 				}
 			} else {
-				if *actualVal != tc.expectVal {
-					t.Fatalf("Failed test: %s, expectVal: %v, actualVal: %v", tc.name, tc.expectVal, actualVal)
+				if *actualVal != tt.expectedVal {
+					t.Fatalf("Failed test: %s, expectedVal: %v, actualVal: %v", tt.name, tt.expectedVal, actualVal)
 				}
 			}
 		})
@@ -72,48 +72,48 @@ func TestWithQueueSize(t *testing.T) {
 }
 
 func TestWithEnqueueWriteSize(t *testing.T) {
-	testcases := []struct {
-		name      string
-		input     int
-		expectRet string
-		expectVal int
+	tests := []struct {
+		name        string
+		input       int
+		expectRet   string
+		expectedVal int
 	}{
 		{
-			name:      "enqueue write size can set",
-			input:     20,
-			expectRet: "",
-			expectVal: 20,
+			name:        "enqueue write size can set",
+			input:       20,
+			expectRet:   "",
+			expectedVal: 20,
 		},
 		{
-			name:      "enqueue write size cannot set with less than 1",
-			input:     0,
-			expectRet: "enqueueWriteSize must be set to greater than 0",
-			expectVal: 0, // nil
+			name:        "enqueue write size cannot set with less than 1",
+			input:       0,
+			expectRet:   "enqueueWriteSize must be set to greater than 0",
+			expectedVal: 0, // nil
 		},
 	}
 
-	for _, tc := range testcases {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			var options options
-			f := WithEnqueueWriteSize(tc.input)
+			f := WithEnqueueWriteSize(tt.input)
 			actualRet := f(&options)
 			if actualRet == nil {
-				if tc.expectRet != "" {
-					t.Fatalf("Failed test: %s, expectRet: %v, actualRet: %v", tc.name, tc.expectRet, actualRet)
+				if tt.expectRet != "" {
+					t.Fatalf("Failed test: %s, expectRet: %v, actualRet: %v", tt.name, tt.expectRet, actualRet)
 				}
 			} else {
-				if !strings.Contains(actualRet.Error(), tc.expectRet) {
-					t.Fatalf("Failed test: %s, expectRet: %v, actualRet: %v", tc.name, tc.expectRet, actualRet)
+				if !strings.Contains(actualRet.Error(), tt.expectRet) {
+					t.Fatalf("Failed test: %s, expectRet: %v, actualRet: %v", tt.name, tt.expectRet, actualRet)
 				}
 			}
 			actualVal := options.enqueueWriteSize
 			if actualVal == nil {
-				if tc.expectVal != 0 {
-					t.Fatalf("Failed test: %s, expectVal: %v, actualVal: %v", tc.name, tc.expectVal, actualVal)
+				if tt.expectedVal != 0 {
+					t.Fatalf("Failed test: %s, expectedVal: %v, actualVal: %v", tt.name, tt.expectedVal, actualVal)
 				}
 			} else {
-				if *actualVal != tc.expectVal {
-					t.Fatalf("Failed test: %s, expectVal: %v, actualVal: %v", tc.name, tc.expectVal, actualVal)
+				if *actualVal != tt.expectedVal {
+					t.Fatalf("Failed test: %s, expectedVal: %v, actualVal: %v", tt.name, tt.expectedVal, actualVal)
 				}
 			}
 		})
@@ -121,48 +121,48 @@ func TestWithEnqueueWriteSize(t *testing.T) {
 }
 
 func TestWithPageSize(t *testing.T) {
-	testcases := []struct {
-		name      string
-		input     int
-		expectRet string
-		expectVal int
+	tests := []struct {
+		name        string
+		input       int
+		expectRet   string
+		expectedVal int
 	}{
 		{
-			name:      "page size can set",
-			input:     4,
-			expectRet: "",
-			expectVal: 4,
+			name:        "page size can set",
+			input:       4,
+			expectRet:   "",
+			expectedVal: 4,
 		},
 		{
-			name:      "page size cannot set with less than 2",
-			input:     1,
-			expectRet: "pageSize must be set to greater than 1",
-			expectVal: 0, // nil
+			name:        "page size cannot set with less than 2",
+			input:       1,
+			expectRet:   "pageSize must be set to greater than 1",
+			expectedVal: 0, // nil
 		},
 	}
 
-	for _, tc := range testcases {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			var options options
-			f := WithPageSize(tc.input)
+			f := WithPageSize(tt.input)
 			actualRet := f(&options)
 			if actualRet == nil {
-				if tc.expectRet != "" {
-					t.Fatalf("Failed test: %s, expectRet: %v, actualRet: %v", tc.name, tc.expectRet, actualRet)
+				if tt.expectRet != "" {
+					t.Fatalf("Failed test: %s, expectRet: %v, actualRet: %v", tt.name, tt.expectRet, actualRet)
 				}
 			} else {
-				if !strings.Contains(actualRet.Error(), tc.expectRet) {
-					t.Fatalf("Failed test: %s, expectRet: %v, actualRet: %v", tc.name, tc.expectRet, actualRet)
+				if !strings.Contains(actualRet.Error(), tt.expectRet) {
+					t.Fatalf("Failed test: %s, expectRet: %v, actualRet: %v", tt.name, tt.expectRet, actualRet)
 				}
 			}
 			actualVal := options.pageSize
 			if actualVal == nil {
-				if tc.expectVal != 0 {
-					t.Fatalf("Failed test: %s, expectVal: %v, actualVal: %v", tc.name, tc.expectVal, actualVal)
+				if tt.expectedVal != 0 {
+					t.Fatalf("Failed test: %s, expectedVal: %v, actualVal: %v", tt.name, tt.expectedVal, actualVal)
 				}
 			} else {
-				if *actualVal != tc.expectVal {
-					t.Fatalf("Failed test: %s, expectVal: %v, actualVal: %v", tc.name, tc.expectVal, actualVal)
+				if *actualVal != tt.expectedVal {
+					t.Fatalf("Failed test: %s, expectedVal: %v, actualVal: %v", tt.name, tt.expectedVal, actualVal)
 				}
 			}
 		})
@@ -170,48 +170,48 @@ func TestWithPageSize(t *testing.T) {
 }
 
 func TestWithDataFixedLength(t *testing.T) {
-	testcases := []struct {
-		name      string
-		input     uint64
-		expectRet string
-		expectVal uint64
+	tests := []struct {
+		name        string
+		input       uint64
+		expectRet   string
+		expectedVal uint64
 	}{
 		{
-			name:      "data fixed length can set",
-			input:     4,
-			expectRet: "",
-			expectVal: 4,
+			name:        "data fixed length can set",
+			input:       4,
+			expectRet:   "",
+			expectedVal: 4,
 		},
 		{
-			name:      "data fixed length cannot set with less than 1",
-			input:     0,
-			expectRet: "dataFixedLength must be set to greater than 0",
-			expectVal: 0, // nil
+			name:        "data fixed length cannot set with less than 1",
+			input:       0,
+			expectRet:   "dataFixedLength must be set to greater than 0",
+			expectedVal: 0, // nil
 		},
 	}
 
-	for _, tc := range testcases {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			var options options
-			f := WithDataFixedLength(tc.input)
+			f := WithDataFixedLength(tt.input)
 			actualRet := f(&options)
 			if actualRet == nil {
-				if tc.expectRet != "" {
-					t.Fatalf("Failed test: %s, expectRet: %v, actualRet: %v", tc.name, tc.expectRet, actualRet)
+				if tt.expectRet != "" {
+					t.Fatalf("Failed test: %s, expectRet: %v, actualRet: %v", tt.name, tt.expectRet, actualRet)
 				}
 			} else {
-				if !strings.Contains(actualRet.Error(), tc.expectRet) {
-					t.Fatalf("Failed test: %s, expectRet: %v, actualRet: %v", tc.name, tc.expectRet, actualRet)
+				if !strings.Contains(actualRet.Error(), tt.expectRet) {
+					t.Fatalf("Failed test: %s, expectRet: %v, actualRet: %v", tt.name, tt.expectRet, actualRet)
 				}
 			}
 			actualVal := options.dataFixedLength
 			if actualVal == nil {
-				if tc.expectVal != 0 {
-					t.Fatalf("Failed test: %s, expectVal: %v, actualVal: %v", tc.name, tc.expectVal, actualVal)
+				if tt.expectedVal != 0 {
+					t.Fatalf("Failed test: %s, expectedVal: %v, actualVal: %v", tt.name, tt.expectedVal, actualVal)
 				}
 			} else {
-				if *actualVal != tc.expectVal {
-					t.Fatalf("Failed test: %s, expectVal: %v, actualVal: %v", tc.name, tc.expectVal, actualVal)
+				if *actualVal != tt.expectedVal {
+					t.Fatalf("Failed test: %s, expectedVal: %v, actualVal: %v", tt.name, tt.expectedVal, actualVal)
 				}
 			}
 		})
@@ -221,7 +221,7 @@ func TestWithDataFixedLength(t *testing.T) {
 func TestWithJSONEncoder(t *testing.T) {
 	var input func(v any) ([]byte, error) = func(v any) ([]byte, error) { return []byte{0x00}, nil }
 	var expectRet error = nil
-	expectVal := input
+	expectedVal := input
 
 	var options options
 	f := WithJSONEncoder(input)
@@ -231,14 +231,14 @@ func TestWithJSONEncoder(t *testing.T) {
 	}
 	actualVal := options.jsonEncoder
 	if actualVal == nil {
-		t.Fatalf("Failed test: expectVal: %p, actualVal: %p", expectVal, actualVal)
+		t.Fatalf("Failed test: expectedVal: %p, actualVal: %p", expectedVal, actualVal)
 	}
 }
 
 func TestWithJSONDecoder(t *testing.T) {
 	var input func(data []byte, v any) error = func(data []byte, v any) error { return nil }
 	var expectRet error = nil
-	expectVal := input
+	expectedVal := input
 
 	var options options
 	f := WithJSONDecoder(input)
@@ -248,6 +248,6 @@ func TestWithJSONDecoder(t *testing.T) {
 	}
 	actualVal := options.jsonDecoder
 	if actualVal == nil {
-		t.Fatalf("Failed test: expectVal: %p, actualVal: %p", expectVal, actualVal)
+		t.Fatalf("Failed test: expectedVal: %p, actualVal: %p", expectedVal, actualVal)
 	}
 }

@@ -106,6 +106,7 @@ func NewGroupQueue[T any](name string, opts ...Option) (*GroupQueue[T], error) {
 
 	maxFileSize := queueSize * dataFixedLength
 	maxIndexSize := queueSize * uint64(pageSize)
+	initializeBlock := make(chan struct{})
 
 	gq := GroupQueue[T]{
 		name:             name,
@@ -116,6 +117,7 @@ func NewGroupQueue[T any](name string, opts ...Option) (*GroupQueue[T], error) {
 		dataFixedLength:  dataFixedLength,
 		maxFileSize:      maxFileSize,
 		maxIndexSize:     maxIndexSize,
+		initializeBlock:  initializeBlock,
 	}
 
 	go func() {

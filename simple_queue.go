@@ -131,16 +131,18 @@ func NewQueue[T any](name string, opts ...Option) (*Queue[T], error) {
 	// open index file
 	indexFilePath := filepath.Join(fileDir, indexFilename)
 	tailIndex, err := readIndex(indexFilePath)
-	headIndex := tailIndex + 1
 	if err != nil {
 		return nil, err
 	}
+	headIndex := tailIndex + 1
+
 	indexFile, err := openIndexFile(indexFilePath)
 	if err != nil {
 		return nil, err
 	}
 
 	startPosition := (headIndex / uint64(enqueueWriteSize)) * dataFixedLength
+	initializeBlock := make(chan struct{})
 
 	q := Queue[T]{
 		name:             name,
@@ -156,6 +158,7 @@ func NewQueue[T any](name string, opts ...Option) (*Queue[T], error) {
 		indexFile:        indexFile,
 		jsonEncoder:      jsonEncoder,
 		jsonDecoder:      jsonDecoder,
+		initializeBlock:  initializeBlock,
 	}
 
 	go func() {
@@ -229,7 +232,7 @@ func (q *Queue[T]) BulkEnqueue(data []*T) error {
 	l := len(data)
 	for i := 0; i < l; i += q.enqueueWriteSize {
 		var jsonData []byte
-		if l < i+q.enqueueWriteSize {
+		if i+q.enqueueWriteSize < l {
 			jsonData, err = q.jsonEncoder(data[i : i+q.enqueueWriteSize])
 		} else {
 			// create include null data
@@ -240,7 +243,7 @@ func (q *Queue[T]) BulkEnqueue(data []*T) error {
 		if err != nil {
 			return err
 		}
-		copy(paddedData[uint64(i)*q.dataFixedLength:], jsonData)
+		copy(paddedData[uint64(i/q.enqueueWriteSize)*q.dataFixedLength:], jsonData)
 		for j := i; j < i+q.enqueueWriteSize; j++ {
 			if j < l {
 				q.queue <- &Message[T]{index: q.headIndex, data: data[j]}
@@ -483,7 +486,7 @@ func (q *Queue[T]) rotateFile() error {
 //	if err != nil {
 //	  log.Fatal(err)
 //	}
-func (q *Queue[T]) UpdateIndex(message Message[T]) error {
+func (q *Queue[T]) UpdateIndex(message *Message[T]) error {
 	return q.writeIndex(message.index)
 }
 
@@ -503,7 +506,7 @@ func (q *Queue[T]) writeIndex(index uint64) error {
 	return nil
 }
 
-// Length returns the current length of the queue.
+// Lengt1 returns the current length of the queue.
 //
 // Returns:
 //   - int: The number of items currently in the queue.
@@ -541,7 +544,7 @@ func (q *Queue[T]) initialize(startPosition uint64) {
 			q.queueFile = queueFile
 			q.currentPage = currentPage
 			q.headIndex = uint64(currentPage) * q.queueSize * uint64(q.enqueueWriteSize)
-			return
+			break
 		}
 
 		// read queue file and set queue
@@ -549,13 +552,14 @@ func (q *Queue[T]) initialize(startPosition uint64) {
 		if err != nil {
 			panic(fmt.Sprintf("could not open file, %s, %v", queueFilepath, err))
 		}
+		q.queueFile = queueFile
 		pageStartPosition := startPosition % q.maxFileSize
-		_, err = queueFile.Seek(int64(pageStartPosition), io.SeekStart)
+		_, err = q.queueFile.Seek(int64(pageStartPosition), io.SeekStart)
 		if err != nil {
 			panic(fmt.Sprintf("could not seek file, %s, %v", queueFilepath, err))
 		}
 		for {
-			_, err := queueFile.Read(buffer)
+			_, err := q.queueFile.Read(buffer)
 			if err != nil {
 				if err == io.EOF {
 					break
