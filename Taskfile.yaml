@@ -1,0 +1,12 @@
+version: "3"
+
+includes:
+  go: ".tasks/Taskfile.go.yaml"
+
+tasks:
+  default:
+    dir: "{{.USER_WORKING_DIR}}"
+    desc: show command
+    cmds:
+      - task --list-all --sort none
+    silent: true
