@@ -1,0 +1,11 @@
+version: "3"
+
+tasks:
+
+  test:
+    desc: run go test without ent
+    dir: "{{.ROOT_DIR}}"
+    cmds:
+      - go test -v -coverprofile=coverage.out $(go list ./... | grep -v "examples")
+      - go tool cover -func=coverage.out
+    silent: true
