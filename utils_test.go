@@ -1,15 +1,13 @@
 package ffq
 
 import (
-	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func TestCreateQueueDir(t *testing.T) {
-	testcases := []struct {
+	tests := []struct {
 		name        string
 		input       string
 		expect      string
@@ -40,113 +38,138 @@ func TestCreateQueueDir(t *testing.T) {
 			afterRemove: false,
 		},
 	}
-	for _, tc := range testcases {
-		t.Run(tc.name, func(t *testing.T) {
-			actual := createQueueDir(tc.input)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			actual := createQueueDir(tt.input)
+			if tt.afterRemove {
+				defer os.RemoveAll(tt.input)
+			}
 			if actual == nil {
-				if tc.expect != "" {
-					t.Fatalf("Failed test: %s, expect: %v, actual: %v", tc.name, tc.expect, actual)
+				if tt.expect != "" {
+					t.Fatalf("Failed test: %s, expect: %v, actual: %v", tt.name, tt.expect, actual)
 				}
 			} else {
-				if !strings.Contains(actual.Error(), tc.expect) {
-					t.Fatalf("Failed test: %s, expect: %v, actual: %v", tc.name, tc.expect, actual)
+				if !strings.Contains(actual.Error(), tt.expect) {
+					t.Fatalf("Failed test: %s, expect: %v, actual: %v", tt.name, tt.expect, actual)
 				}
-			}
-
-			if tc.afterRemove {
-				os.RemoveAll(tc.input)
 			}
 		})
 	}
 }
 
 func TestOpenIndexFile(t *testing.T) {
-	testcases := []struct {
+	tests := []struct {
 		name        string
 		input       string
-		expect      string
+		expectedVal bool
+		expectedErr string
 		afterRemove bool
 	}{
 		{
-			name:        "directory already exists",
-			input:       "testdata/utils/open_index_file/index",
-			expect:      "",
+			name:        "index already exists",
+			input:       "testdata/utils/open_index_file/ffq/index",
+			expectedVal: true,
+			expectedErr: "",
 			afterRemove: false,
 		},
 		{
-			name:        "directory does not exist",
-			input:       "testdata/utils/open_index_file/index",
-			expect:      "",
-			afterRemove: false,
+			name:        "index not exists",
+			input:       "testdata/utils/open_index_file/ffq/index_new",
+			expectedVal: true,
+			expectedErr: "",
+			afterRemove: true,
 		},
 		{
-			name:        "invalid directory name, stat error",
-			input:       string([]byte{0x00}),
-			expect:      "invalid argument",
-			afterRemove: false,
-		},
-		{
-			name:        "root manage directory, mkdir error",
-			input:       "/invalid_dir",
-			expect:      "permission denied",
+			name:        "index cannot create",
+			input:       "/root/index",
+			expectedVal: false,
+			expectedErr: "permission denied",
 			afterRemove: false,
 		},
 	}
-	for _, tc := range testcases {
-		t.Run(tc.name, func(t *testing.T) {
-			actual := createQueueDir(tc.input)
-			if actual == nil {
-				if tc.expect != "" {
-					t.Fatalf("Failed test: %s, expect: %v, actual: %v", tc.name, tc.expect, actual)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			actualVal, actualErr := openIndexFile(tt.input)
+			if actualVal != nil {
+				if !tt.expectedVal {
+					t.Fatalf("Failed test: %s, expectedVal: %v, actualVal: %v", tt.name, tt.expectedVal, actualVal)
 				}
 			} else {
-				if !strings.Contains(actual.Error(), tc.expect) {
-					t.Fatalf("Failed test: %s, expect: %v, actual: %v", tc.name, tc.expect, actual)
+				if tt.expectedVal {
+					t.Fatalf("Failed test: %s, expectedVal: %v, actualVal: %v", tt.name, tt.expectedVal, actualVal)
+				}
+			}
+			if actualErr == nil {
+				if tt.expectedErr != "" {
+					t.Fatalf("Failed test: %s, expectedErr: %v, actualErr: %v", tt.name, tt.expectedErr, actualErr)
+				}
+			} else {
+				if !strings.Contains(actualErr.Error(), tt.expectedErr) {
+					t.Fatalf("Failed test: %s, expectedErr: %v, actualErr: %v", tt.name, tt.expectedErr, actualErr)
 				}
 			}
 
-			if tc.afterRemove {
-				os.RemoveAll(tc.input)
+			if tt.afterRemove {
+				os.RemoveAll(tt.input)
 			}
 		})
 	}
 }
 
 func TestReadIndex(t *testing.T) {
-	dirName := "testdata/ffq"
+	tests := []struct {
+		name        string
+		input       string
+		expectedVal uint64
+		expectedErr string
+	}{
+		{
+			name:        "file does not exist",
+			input:       "testdata/utils/read_index/ffq/index_new",
+			expectedVal: 0,
+			expectedErr: "",
+		},
+		{
+			name:        "file cannnot open invalid permission",
+			input:       "testdata/utils/read_index/ffq/index_invalid_permission",
+			expectedVal: 0,
+			expectedErr: "permission denied",
+		},
+		{
+			name:        "read from file",
+			input:       "testdata/utils/read_index/ffq/index",
+			expectedVal: 12345,
+			expectedErr: "",
+		},
+		{
+			name:        "read from invalid short data",
+			input:       "testdata/utils/read_index/ffq/index_invalid_eof",
+			expectedVal: 0,
+			expectedErr: "EOF",
+		},
+		{
+			name:        "read from invalid string data",
+			input:       "testdata/utils/read_index/ffq/index_invalid_string",
+			expectedVal: 0,
+			expectedErr: "expected integer",
+		},
+	}
 
-	// Clean up before test
-	defer os.RemoveAll(dirName)
-	indexFilepath := filepath.Join(dirName, "index")
-	createQueueDir(dirName)
-
-	// Test reading from a non-existing file
-	index, err := readIndex(indexFilepath)
-	if err != nil {
-		t.Fatalf("Failed to read index from a non-existing file: %v", err)
-	}
-	if index != 0 {
-		t.Errorf("Expected index to be 0, got %d", index)
-	}
-
-	// Create and write an index to the file
-	expectedIndex := uint64(12345)
-	file, err := os.OpenFile(indexFilepath, os.O_RDWR|os.O_CREATE, 0644)
-	if err != nil {
-		t.Fatalf("Failed to create test index file: %v", err)
-	}
-	_, err = fmt.Fprintf(file, "%019d", expectedIndex)
-	if err != nil {
-		t.Fatalf("Failed to write index to test index file: %v", err)
-	}
-	file.Close()
-
-	// Test reading from an existing file
-	index, err = readIndex(indexFilepath)
-	if err != nil {
-		t.Fatalf("Failed to read index from an existing file: %v", err)
-	}
-	if index != expectedIndex {
-		t.Errorf("Expected index %d, got %d", expectedIndex, index)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			actualVal, actualErr := readIndex(tt.input)
+			if actualVal != tt.expectedVal {
+				t.Fatalf("Failed test: %s, expectedVal: %v, actualVal: %v", tt.name, tt.expectedVal, actualVal)
+			}
+			if actualErr == nil {
+				if tt.expectedErr != "" {
+					t.Fatalf("Failed test: %s, expectedErr: %v, actualErr: %v", tt.name, tt.expectedErr, actualErr)
+				}
+			} else {
+				if !strings.Contains(actualErr.Error(), tt.expectedErr) {
+					t.Fatalf("Failed test: %s, expectedErr: %v, actualErr: %v", tt.name, tt.expectedErr, actualErr)
+				}
+			}
+		})
 	}
 }
