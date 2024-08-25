@@ -1,3 +1,4 @@
+// Package ffq provides a file-based FIFO queue implementation that supports generic types.
 package ffq
 
 import (

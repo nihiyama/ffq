@@ -26,7 +26,6 @@ jobs:
 
       - name: Run tests
         run: |
-          whoami
           go test -v -coverprofile=coverage.out $(go list ./... | grep -v "examples")
           go tool cover -func=coverage.out
 
