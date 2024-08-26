@@ -1,0 +1,24 @@
+<svg host="65bd71144e" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" width="604px" height="172px" viewBox="-0.5 -0.5 604 172" content="&lt;mxfile&gt;&lt;diagram id=&quot;TwAQ553Bn039Jbpku9Cw&quot; name=&quot;Page-1&quot;&gt;5ZjNbqMwFIWfhm0ENhBYTtOmXcyolbKYtRMcsGIwMk6TzNOPDTaEQAtSSTI/qVTBsR3wd67vvYoFF+nxmaM8+cEiTC1gR0cLPloAeKEr/yvhVAkQOpUQcxJV0pmwIr+wFm2t7kmEi9ZEwRgVJG+LG5ZleCNaGuKcHdrTtoy2n5qjGHeE1QbRrvqTRCKp1ADMG/0FkzgxT3b8sBpJkZmsd1IkKGKHMwk+WXDBGRPVVXpcYKrYGS7VuuUHo/WLcZyJMQtAteAd0b3em34vcTKb5WyfRVjNty34cEiIwKscbdToQbortUSkVN458rIQnO3wglHGpZKxTE572BJKjWQBuATqT+rdl9Xv/465wMczSb/8M2YpFvwkp5hRA/J0cX9ofKm15MwTV2tIh0Jcf3VDS15oYP3w4DA86W+uLuUmEaWYspijVG49x5zI52F+OfbWDAyx3pIjNofD+QRzrydTsLeH2fs96B1/AvbuXx64NZl7BK73fwduzfAegesPs1c7IbLafEdrTN9YQQRhmRxaMyGYMsFM+EZJrAYEu4xm7V56jFUBnq1RQTaziGV7uZWHsg5DZzYP7wAfBvPhwHevRX9+P/q87EQa3qDBWrE2rUT5FdXpACpzEZnFStzeHeyat48KsLtuwbDPLfB1s0y796fnqYgob6sowagQH5YTSvKXtsGBPY1NrjvsU12vz33y/Ql8coZ9kitkd46HoaMir1r2kn6XOoRhuFxeta1p5yfYE/E9IOEE2ckcmpuAXC59+blmpr8AGXi3AzmiNZ8MpIrHMLwGSHOY3RuG4IgKaXJuxsQIfGu02cVlL/66F5RkJptGiO9e5Soi1Dbtme11EHYLnKmR4MIGU0h1svaniWDPBe2sOrJRnKJTcYJhIwQnKIvpCBN6Q/NzpGWKUB+pcyaQLnAwnAUT0QVlC9oC7EmpmyYArCe24t39OmZwy9p19ZTrBRcB63VhmtzY6tbgBCRvWbyu3gV4vnc/kv9G9aqTaHArkvK2+em0HDv7/Rk+/QY=&lt;/diagram&gt;&lt;/mxfile&gt;">
+    <defs/>
+    <g>
+        <rect x="120" y="0" width="120" height="40" fill="#f2f2f2" stroke="none" pointer-events="all"/>
+        <path d="M 100 160 L 120 0 L 160 0 L 140 160 Z" fill="#f2f2f2" stroke="none" pointer-events="all"/>
+        <rect x="260" y="0" width="120" height="40" fill="#f2f2f2" stroke="none" pointer-events="all"/>
+        <path d="M 240 160 L 260 0 L 300 0 L 280 160 Z" fill="#f2f2f2" stroke="none" pointer-events="all"/>
+        <path d="M 387 80 C 387 35.82 418.34 0 457 0 C 475.57 0 493.37 8.43 506.5 23.43 C 519.63 38.43 527 58.78 527 80 C 527 101.22 519.63 121.57 506.5 136.57 C 493.37 151.57 475.57 160 457 160 C 438.43 160 420.63 151.57 407.5 136.57 C 394.37 121.57 387 101.22 387 80 Z M 457 31.79 C 435.9 31.79 418.79 53.37 418.79 80 C 418.79 106.63 435.9 128.21 457 128.21 C 467.13 128.21 476.85 123.13 484.02 114.09 C 491.18 105.05 495.21 92.79 495.21 80 C 495.21 53.37 478.1 31.79 457 31.79 Z" fill="#f2f2f2" stroke="none" pointer-events="all"/>
+        <path d="M 70 80 L 460 80 L 460 92 L 70 92 L 70 80 Z" fill="#f2f2f2" stroke="none" pointer-events="all"/>
+        <path d="M 70 80 L 70 92 L 70 92 L 460 92 L 460 80 L 70 80" fill="none" stroke="none" pointer-events="all"/>
+        <path d="M 70 80 L 460 80 L 460 92 L 70 92 L 70 80 Z" fill="none" stroke="none" pointer-events="all"/>
+        <path d="M 440 146 L 520 80 L 540 80 L 460 146 Z" fill="#f2f2f2" stroke="none" transform="translate(490,0)scale(-1,1)translate(-490,0)" pointer-events="all"/>
+        <ellipse cx="25" cy="25" rx="15" ry="15" fill="#3399ff" stroke="none" pointer-events="all"/>
+        <ellipse cx="45" cy="80" rx="15" ry="15" fill="#ff6666" stroke="none" pointer-events="all"/>
+        <ellipse cx="15" cy="135" rx="15" ry="15" fill="#99ff99" stroke="none" pointer-events="all"/>
+        <path d="M 542 100 L 586 100 L 602 116 L 602 160 L 542 160 L 542 100 Z" fill="none" stroke="#f2f2f2" stroke-width="2" stroke-miterlimit="10" pointer-events="all"/>
+        <path d="M 586 100 L 586 116 L 602 116 Z" fill-opacity="0.05" fill="#000000" stroke="none" pointer-events="all"/>
+        <path d="M 586 100 L 586 116 L 602 116" fill="none" stroke="#f2f2f2" stroke-width="2" stroke-miterlimit="10" pointer-events="all"/>
+        <path d="M 521.79 131.75 L 545.58 148.75 L 521.79 165.75 Z" fill="#ffffff" stroke="none" transform="rotate(39.8,533.68,148.75)" pointer-events="all"/>
+        <ellipse cx="588.5" cy="141.5" rx="6.5" ry="6.5" fill="#ff6666" stroke="none" pointer-events="all"/>
+        <ellipse cx="571.5" cy="141.5" rx="6.5" ry="6.5" fill="#3399ff" stroke="none" pointer-events="all"/>
+        <ellipse cx="554.5" cy="141.5" rx="6.5" ry="6.5" fill="#99ff99" stroke="none" pointer-events="all"/>
+    </g>
+</svg>
