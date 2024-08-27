@@ -1,7 +1,7 @@
 <div align="center">
     <picture>
-        <source media="(prefers-color-schema: dark)" srcset="./assets/logo-dark.drawio.svg">
-        <source media="(prefers-color-schema: light)" srcset="./assets/logo-light.drawio.svg">
+        <source media="(prefers-color-scheme: dark)" srcset="./assets/logo-dark.drawio.svg">
+        <source media="(prefers-color-scheme: light)" srcset="./assets/logo-light.drawio.svg">
         <img alt="FFQ logo" src="./assets/logo-dark.drawio.svg" width="250">
     </picture>
 </div>
