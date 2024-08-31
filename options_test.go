@@ -25,9 +25,9 @@ func TestWithFileDir(t *testing.T) {
 func TestWithQueueSize(t *testing.T) {
 	tests := []struct {
 		name        string
-		input       uint64
+		input       int
 		expectRet   string
-		expectedVal uint64
+		expectedVal int
 	}{
 		{
 			name:        "queue size can set",

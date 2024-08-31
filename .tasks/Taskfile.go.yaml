@@ -3,11 +3,18 @@ version: "3"
 tasks:
 
   test:
-    desc: run go test without ent
+    desc: run go test
     dir: "{{.ROOT_DIR}}"
     cmds:
       - chmod 111 testdata/utils/read_index/ffq/index_invalid_permission
       - go test -v -coverprofile=coverage.out $(go list ./... | grep -v "examples")
       - go tool cover -func=coverage.out
       - chmod 644 testdata/utils/read_index/ffq/index_invalid_permission
+    silent: true
+
+  bench:
+    desc: run go benchmark
+    dir: "{{.ROOT_DIR}}"
+    cmds:
+      - go test -benchmem -run=^$ -bench ^Benchmark github.com/nihiyama/ffq
     silent: true

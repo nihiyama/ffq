@@ -7,7 +7,7 @@ import (
 
 type options struct {
 	fileDir          *string
-	queueSize        *uint64
+	queueSize        *int
 	enqueueWriteSize *int
 	pageSize         *int
 	dataFixedLength  *uint64
@@ -51,7 +51,7 @@ func WithFileDir(fileDir string) Option {
 // Example:
 //
 //	queue, err := NewQueue("myQueue", WithQueueSize(100))
-func WithQueueSize(size uint64) Option {
+func WithQueueSize(size int) Option {
 	return func(options *options) error {
 		if size < 1 {
 			err := errors.New("queueSize must be set to greater than 0")

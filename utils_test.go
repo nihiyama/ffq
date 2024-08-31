@@ -120,7 +120,7 @@ func TestReadIndex(t *testing.T) {
 	tests := []struct {
 		name        string
 		input       string
-		expectedVal uint64
+		expectedVal int
 		expectedErr string
 	}{
 		{

@@ -28,7 +28,7 @@ func openIndexFile(indexFilepath string) (*os.File, error) {
 	return indexFile, err
 }
 
-func readIndex(indexFilepath string) (uint64, error) {
+func readIndex(indexFilepath string) (int, error) {
 	var err error
 	if _, err := os.Stat(indexFilepath); os.IsNotExist(err) {
 		return 0, nil
@@ -37,13 +37,13 @@ func readIndex(indexFilepath string) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	// uint64 size is 19
-	buffer := make([]byte, 19)
+	// uint64 size is 10
+	buffer := make([]byte, 10)
 	_, err = indexFile.Read(buffer)
 	if err != nil {
 		return 0, err
 	}
-	var index uint64
+	var index int
 	_, err = fmt.Sscanf(string(buffer), "%d", &index)
 	if err != nil {
 		return 0, err

@@ -30,12 +30,12 @@ import (
 type GroupQueue[T any] struct {
 	name             string
 	fileDir          string
-	queueSize        uint64
+	queueSize        int
 	enqueueWriteSize int
 	pageSize         int
 	dataFixedLength  uint64
 	maxFileSize      uint64
-	maxIndexSize     uint64
+	maxIndexSize     int
 	initializeBlock  chan struct{}
 	queues           map[string]*Queue[T]
 	sig              chan struct{}
@@ -44,7 +44,7 @@ type GroupQueue[T any] struct {
 
 type bulkQueueChData[T any] struct {
 	data     []*T
-	indicies map[string]uint64
+	indicies map[string]int
 }
 
 // NewGroupQueue creates a new GroupQueue with the specified name and options.
@@ -84,29 +84,32 @@ func NewGroupQueue[T any](name string, opts ...Option) (*GroupQueue[T], error) {
 		return nil, err
 	}
 
-	var queueSize uint64 = 100
+	queueSize := 100
 	if options.queueSize != nil {
 		queueSize = *options.queueSize
 	}
 
-	var enqueueWriteSize int = 10
+	enqueueWriteSize := 10
 	if options.enqueueWriteSize != nil {
 		enqueueWriteSize = *options.enqueueWriteSize
 	}
 
-	var pageSize int = 2
+	pageSize := 2
 	if options.pageSize != nil {
 		pageSize = *options.pageSize
 	}
 
-	var dataFixedLength uint64 = 8 * 1024
+	var dataFixedLength uint64 = 8
 	if options.dataFixedLength != nil {
-		dataFixedLength = *options.dataFixedLength * 1024
+		dataFixedLength = *options.dataFixedLength
 	}
 
-	maxFileSize := queueSize * dataFixedLength
-	maxIndexSize := queueSize * uint64(pageSize)
+	maxFileSize := uint64(queueSize) * dataFixedLength
+	maxIndexSize := queueSize * pageSize
 	initializeBlock := make(chan struct{})
+	queues := make(map[string]*Queue[T], 10)
+	var mu sync.Mutex
+	sig := make(chan struct{}, 1)
 
 	gq := GroupQueue[T]{
 		name:             name,
@@ -118,6 +121,9 @@ func NewGroupQueue[T any](name string, opts ...Option) (*GroupQueue[T], error) {
 		maxFileSize:      maxFileSize,
 		maxIndexSize:     maxIndexSize,
 		initializeBlock:  initializeBlock,
+		queues:           queues,
+		mu:               &mu,
+		sig:              sig,
 	}
 
 	go func() {
@@ -220,11 +226,25 @@ func (gq *GroupQueue[T]) BulkEnqueue(name string, data []*T) error {
 		}
 		q = gq.queues[name]
 	}
-	err = q.BulkEnqueue(data)
-	if err != nil {
-		return err
+	i := 0
+	ld := len(data)
+	for i < ld {
+		next := i + q.queueSize - q.Length()
+		if next == i {
+			time.After(100 * time.Microsecond)
+			continue
+		}
+		if next >= ld {
+			err = q.BulkEnqueue(data[i:])
+		} else {
+			err = q.BulkEnqueue(data[i:next])
+		}
+		if err != nil {
+			return err
+		}
+		gq.sendSignal()
+		i = next
 	}
-	gq.sendSignal()
 	return nil
 }
 
@@ -249,14 +269,9 @@ func (gq *GroupQueue[T]) BulkEnqueue(name string, data []*T) error {
 func (gq *GroupQueue[T]) Dequeue(batch int) (chan *Message[T], error) {
 	var err error
 	mCh := make(chan *Message[T])
-
 	<-gq.sig
-
 	gq.mu.Lock()
-	nameQueueLenMap := make(map[string]int, len(gq.queues))
-	for name, q := range gq.queues {
-		nameQueueLenMap[name] = q.Length()
-	}
+	nameQueueLenMap := gq.lengthWithNotEmpty()
 	gq.mu.Unlock()
 	go func() {
 		defer close(mCh)
@@ -274,7 +289,7 @@ func (gq *GroupQueue[T]) Dequeue(batch int) (chan *Message[T], error) {
 				for i := 0; i < n; i++ {
 					message, qErr := q.Dequeue()
 					if qErr != nil {
-						err = errors.Join(err, qErr)
+						err = errors.Join(err, fmt.Errorf("queue name: %s, %v", name, qErr))
 					}
 					mCh <- message
 				}
@@ -311,28 +326,25 @@ func (gq *GroupQueue[T]) Dequeue(batch int) (chan *Message[T], error) {
 //	    fmt.Println("Dequeued message:", *message.Data())
 //	  }
 //	}
-func (gq *GroupQueue[T]) BulkDequeue(batch int, size int, lazy int) (chan []*Message[T], error) {
+func (gq *GroupQueue[T]) BulkDequeue(batch int, size int, lazy time.Duration) (chan []*Message[T], error) {
 	var err error
 	msCh := make(chan []*Message[T])
 	<-gq.sig
 
 	go func() {
 		defer close(msCh)
-		timer := time.After(time.Duration(lazy) * time.Millisecond)
-		// add signal becase get signal first
+		timer := time.After(lazy)
+		messages := make([]*Message[T], 0, size)
+		// add signal because get signal first
 		gq.sendSignal()
 		for {
-			messages := make([]*Message[T], 0, size)
 			select {
 			case <-timer:
 				msCh <- messages
 				return
 			case <-gq.sig:
 				gq.mu.Lock()
-				nameQueueLenMap := make(map[string]int, len(gq.queues))
-				for name, q := range gq.queues {
-					nameQueueLenMap[name] = q.Length()
-				}
+				nameQueueLenMap := gq.lengthWithNotEmpty()
 				gq.mu.Unlock()
 				for len(nameQueueLenMap) > 0 {
 					for name, length := range nameQueueLenMap {
@@ -348,7 +360,7 @@ func (gq *GroupQueue[T]) BulkDequeue(batch int, size int, lazy int) (chan []*Mes
 						for i := 0; i < n; i++ {
 							message, qErr := q.Dequeue()
 							if qErr != nil {
-								err = errors.Join(err, qErr)
+								err = errors.Join(err, fmt.Errorf("queue name: %s, %v", name, qErr))
 							}
 							messages = append(messages, message)
 							if len(messages) == size {
@@ -394,12 +406,7 @@ func (gq *GroupQueue[T]) FuncAfterDequeue(batch int, f func(*T) error) error {
 
 	// check name and queue length
 	gq.mu.Lock()
-	nameQueueLenMap := make(map[string]int, len(gq.queues))
-	for name, q := range gq.queues {
-		if ql := q.Length(); ql > 0 {
-			nameQueueLenMap[name] = ql
-		}
-	}
+	nameQueueLenMap := gq.lengthWithNotEmpty()
 	gq.mu.Unlock()
 
 	for len(nameQueueLenMap) > 0 {
@@ -416,7 +423,7 @@ func (gq *GroupQueue[T]) FuncAfterDequeue(batch int, f func(*T) error) error {
 			for i := 0; i < n; i++ {
 				message, qErr := q.Dequeue()
 				if qErr != nil {
-					err = errors.Join(err, qErr)
+					err = errors.Join(err, fmt.Errorf("queue name: %s, %v", name, qErr))
 				}
 
 				fErr := f(message.data)
@@ -460,19 +467,19 @@ func (gq *GroupQueue[T]) FuncAfterDequeue(batch int, f func(*T) error) error {
 //	if err != nil {
 //	  log.Fatal(err)
 //	}
-func (gq *GroupQueue[T]) FuncAfterBulkDequeue(batch int, size int, lazy int, f func([]*T) error) error {
+func (gq *GroupQueue[T]) FuncAfterBulkDequeue(batch int, size int, lazy time.Duration, f func([]*T) error) error {
 	var err error
 	dataCh := make(chan bulkQueueChData[T])
 	<-gq.sig
 
 	go func() {
 		defer close(dataCh)
-		timer := time.After(time.Duration(lazy) * time.Millisecond)
-		// add signal becase get signal first
+		timer := time.After(lazy)
+		d := make([]*T, 0, size)
+		indicies := make(map[string]int, len(gq.queues))
+		// add signal because get signal first
 		gq.sendSignal()
 		for {
-			d := make([]*T, 0, size)
-			indicies := make(map[string]uint64, len(gq.queues))
 			select {
 			case <-timer:
 				dataCh <- bulkQueueChData[T]{
@@ -482,10 +489,7 @@ func (gq *GroupQueue[T]) FuncAfterBulkDequeue(batch int, size int, lazy int, f f
 				return
 			case <-gq.sig:
 				gq.mu.Lock()
-				nameQueueLenMap := make(map[string]int, len(gq.queues))
-				for name, q := range gq.queues {
-					nameQueueLenMap[name] = q.Length()
-				}
+				nameQueueLenMap := gq.lengthWithNotEmpty()
 				gq.mu.Unlock()
 				for len(nameQueueLenMap) > 0 {
 					for name, length := range nameQueueLenMap {
@@ -503,7 +507,7 @@ func (gq *GroupQueue[T]) FuncAfterBulkDequeue(batch int, size int, lazy int, f f
 							message, qErr := q.Dequeue()
 							indicies[name] = message.index
 							if qErr != nil {
-								err = errors.Join(err, qErr)
+								err = errors.Join(err, fmt.Errorf("queue name: %s, %v", name, qErr))
 							}
 							d = append(d, message.data)
 							if len(d) == size {
@@ -512,7 +516,7 @@ func (gq *GroupQueue[T]) FuncAfterBulkDequeue(batch int, size int, lazy int, f f
 									indicies: indicies,
 								}
 								d = make([]*T, 0, size)
-								indicies = make(map[string]uint64, len(nameQueueLenMap))
+								indicies = make(map[string]int, len(nameQueueLenMap))
 							}
 						}
 						length = length - n
@@ -546,6 +550,24 @@ func (gq *GroupQueue[T]) FuncAfterBulkDequeue(batch int, size int, lazy int, f f
 		}
 	}
 	return err
+}
+
+func (gq *GroupQueue[T]) lengthWithNotEmpty() map[string]int {
+	nameQueueLenMap := make(map[string]int, len(gq.queues))
+	for name, q := range gq.queues {
+		if ql := q.Length(); ql > 0 {
+			nameQueueLenMap[name] = ql
+		}
+	}
+	return nameQueueLenMap
+}
+
+func (gq *GroupQueue[T]) Length() map[string]int {
+	nameQueueLenMap := make(map[string]int, len(gq.queues))
+	for name, q := range gq.queues {
+		nameQueueLenMap[name] = q.Length()
+	}
+	return nameQueueLenMap
 }
 
 func (gq *GroupQueue[T]) initialize() {
@@ -587,4 +609,84 @@ func (gq *GroupQueue[T]) sendSignal() {
 	case gq.sig <- struct{}{}:
 	default:
 	}
+}
+
+// CloseQueue closes all the queues in the GroupQueue.
+//
+// This method locks the GroupQueue, iterates over all the queues in it, and calls their
+// respective CloseQueue methods. If any errors occur while closing the queues, they are
+// accumulated and returned as a combined error.
+//
+// Returns:
+//   - error: An error that accumulates any issues that occurred while closing the queues.
+//     If all queues are closed successfully, nil is returned.
+func (gq *GroupQueue[T]) CloseQueue() error {
+	var err error
+	gq.mu.Lock()
+	for _, q := range gq.queues {
+		closeErr := q.CloseQueue()
+		if closeErr != nil {
+			err = errors.Join(err, closeErr)
+		}
+	}
+	gq.mu.Unlock()
+	return err
+}
+
+// CloseIndex closes the index files of all queues in the GroupQueue after ensuring all queues are empty.
+//
+// This method first checks if all queues in the GroupQueue are empty by repeatedly calling
+// lengthWithNotEmpty and waiting for the specified interval if there are still items in any queue.
+// Once all queues are confirmed to be empty, it closes the index files of each queue.
+// If any errors occur while closing the index files, they are accumulated and returned as a combined error.
+//
+// Parameters:
+//   - interval: The duration to wait between checks for non-empty queues.
+//
+// Returns:
+//   - error: An error that accumulates any issues that occurred while closing the index files.
+//     If all index files are closed successfully, nil is returned.
+func (gq *GroupQueue[T]) CloseIndex(interval time.Duration) error {
+	var err error
+	for {
+		gq.mu.Lock()
+		nameQueueLenMap := gq.lengthWithNotEmpty()
+		gq.mu.Unlock()
+		if len(nameQueueLenMap) == 0 {
+			break
+		}
+		time.Sleep(interval)
+	}
+	for name, q := range gq.queues {
+		closeErr := q.indexFile.Close()
+		if closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("queue name: %s, %v", name, closeErr))
+		}
+	}
+	return err
+}
+
+// UpdateIndex updates the index of the specified queue within the GroupQueue.
+//
+// This method locates the queue associated with the given message and attempts to update its index
+// using the message's index value. If the specified queue is not found, or if there is an error
+// during the index update, the errors are accumulated and returned.
+//
+// Parameters:
+//   - message: A pointer to a Message containing the queue name and index to be updated.
+//
+// Returns:
+//   - error: An error that combines any errors encountered during the update process.
+//     If the queue is found and the index is updated successfully, nil is returned.
+func (gq *GroupQueue[T]) UpdateIndex(message *Message[T]) error {
+	var err error
+	q, ok := gq.queues[message.name]
+	if !ok {
+		err = errors.Join(err, fmt.Errorf("queue name: %s, %v", message.name, ErrQueueNotFound))
+	}
+	iErr := q.writeIndex(message.index)
+	if iErr != nil {
+		err = errors.Join(err, iErr)
+	}
+	return err
 }
