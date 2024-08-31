@@ -69,7 +69,7 @@ func TestNewGroupQueue(t *testing.T) {
 			if tt.pageSize != actual.pageSize {
 				t.Errorf("Failed test: pageSize, expect: %v, actual: %v", tt.pageSize, actual.pageSize)
 			}
-			if tt.dataFixedLength*1024 != actual.dataFixedLength {
+			if tt.dataFixedLength != actual.dataFixedLength {
 				t.Errorf("Failed test: dataFixedLength, expect: %v, actual: %v", tt.dataFixedLength*1024*uint64(tt.enqueueWriteSize), actual.dataFixedLength)
 			}
 			if tt.fileDir != actual.fileDir {
