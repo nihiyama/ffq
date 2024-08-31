@@ -40,14 +40,14 @@ var (
 type Queue[T any] struct {
 	name             string
 	fileDir          string
-	queueSize        uint64
+	queueSize        int
 	enqueueWriteSize int
 	pageSize         int
 	dataFixedLength  uint64
 	maxFileSize      uint64
-	maxIndexSize     uint64
+	maxIndexSize     int
 	queue            chan *Message[T]
-	headIndex        uint64
+	headIndex        int
 	currentPage      int
 	queueFile        *os.File
 	indexFile        *os.File
@@ -93,17 +93,17 @@ func NewQueue[T any](name string, opts ...Option) (*Queue[T], error) {
 		return nil, err
 	}
 
-	var queueSize uint64 = 100
+	queueSize := 100
 	if options.queueSize != nil {
 		queueSize = *options.queueSize
 	}
 
-	var enqueueWriteSize int = 15
+	enqueueWriteSize := 15
 	if options.enqueueWriteSize != nil {
 		enqueueWriteSize = *options.enqueueWriteSize
 	}
 
-	var pageSize int = 2
+	pageSize := 2
 	if options.pageSize != nil {
 		pageSize = *options.pageSize
 	}
@@ -123,8 +123,8 @@ func NewQueue[T any](name string, opts ...Option) (*Queue[T], error) {
 		jsonDecoder = *options.jsonDecoder
 	}
 
-	maxFileSize := queueSize * dataFixedLength
-	maxIndexSize := queueSize * uint64(pageSize) * uint64(enqueueWriteSize)
+	maxFileSize := uint64(queueSize) * dataFixedLength
+	maxIndexSize := queueSize * pageSize * enqueueWriteSize
 
 	queue := make(chan *Message[T], queueSize)
 
@@ -141,7 +141,7 @@ func NewQueue[T any](name string, opts ...Option) (*Queue[T], error) {
 		return nil, err
 	}
 
-	startPosition := (headIndex / uint64(enqueueWriteSize)) * dataFixedLength
+	startPosition := uint64((headIndex / enqueueWriteSize)) * dataFixedLength
 	initializeBlock := make(chan struct{})
 
 	q := Queue[T]{
@@ -196,8 +196,8 @@ func (q *Queue[T]) Enqueue(data *T) error {
 	copy(paddedData, jsonData)
 
 	// write queue channel
-	q.queue <- &Message[T]{index: q.headIndex, data: data}
-	q.headIndex += uint64(q.enqueueWriteSize)
+	q.queue <- &Message[T]{name: q.name, index: q.headIndex, data: data}
+	q.headIndex += q.enqueueWriteSize
 	if q.headIndex == q.maxIndexSize {
 		q.headIndex = 0
 	}
@@ -246,10 +246,10 @@ func (q *Queue[T]) BulkEnqueue(data []*T) error {
 		copy(paddedData[uint64(i/q.enqueueWriteSize)*q.dataFixedLength:], jsonData)
 		for j := i; j < i+q.enqueueWriteSize; j++ {
 			if j < l {
-				q.queue <- &Message[T]{index: q.headIndex, data: data[j]}
+				q.queue <- &Message[T]{name: q.name, index: q.headIndex, data: data[j]}
 				q.headIndex++
 			} else {
-				q.headIndex += uint64(i + q.enqueueWriteSize - j)
+				q.headIndex += i + q.enqueueWriteSize - j
 				break
 			}
 		}
@@ -300,14 +300,14 @@ func (q *Queue[T]) Dequeue() (*Message[T], error) {
 //	if err != nil {
 //	  log.Fatal(err)
 //	}
-func (q *Queue[T]) BulkDequeue(size int, lazy int) ([]*Message[T], error) {
+func (q *Queue[T]) BulkDequeue(size int, lazy time.Duration) ([]*Message[T], error) {
 	messages := make([]*Message[T], 0, size)
 	m, ok := <-q.queue
 	if !ok {
 		return messages, ErrQueueClose
 	}
 	messages = append(messages, m)
-	timer := time.After(time.Duration(lazy) * time.Millisecond)
+	timer := time.After(lazy)
 	for {
 		select {
 		case <-timer:
@@ -382,7 +382,7 @@ func (q *Queue[T]) FuncAfterDequeue(f func(*T) error) error {
 //	if err != nil {
 //	  log.Fatal(err)
 //	}
-func (q *Queue[T]) FuncAfterBulkDequeue(size int, lazy int, f func([]*T) error) error {
+func (q *Queue[T]) FuncAfterBulkDequeue(size int, lazy time.Duration, f func([]*T) error) error {
 	var err error
 
 	data := make([]*T, 0, size)
@@ -392,18 +392,18 @@ func (q *Queue[T]) FuncAfterBulkDequeue(size int, lazy int, f func([]*T) error) 
 	}
 	index := m.index
 	data = append(data, m.data)
-	timer := time.After(time.Duration(lazy) * time.Millisecond)
+	timer := time.After(lazy)
 LOOP:
 	for {
 		select {
 		case <-timer:
 			break LOOP
 		case m, ok := <-q.queue:
-			data = append(data, m.data)
 			if !ok {
 				err = errors.Join(err, ErrQueueClose)
-				break LOOP
+				return err
 			}
+			data = append(data, m.data)
 			index = m.index
 			if len(data) == size {
 				break LOOP
@@ -490,7 +490,7 @@ func (q *Queue[T]) UpdateIndex(message *Message[T]) error {
 	return q.writeIndex(message.index)
 }
 
-func (q *Queue[T]) writeIndex(index uint64) error {
+func (q *Queue[T]) writeIndex(index int) error {
 	var err error
 
 	_, err = q.indexFile.Seek(0, io.SeekStart)
@@ -498,7 +498,7 @@ func (q *Queue[T]) writeIndex(index uint64) error {
 		return err
 	}
 	// uin64 size is 19
-	indexStr := fmt.Sprintf("%0*d", 19, index)
+	indexStr := fmt.Sprintf("%0*d", 10, index)
 	_, err = q.indexFile.Write([]byte(indexStr))
 	if err != nil {
 		return err
@@ -543,7 +543,7 @@ func (q *Queue[T]) initialize(startPosition uint64) {
 			}
 			q.queueFile = queueFile
 			q.currentPage = currentPage
-			q.headIndex = uint64(currentPage) * q.queueSize * uint64(q.enqueueWriteSize)
+			q.headIndex = currentPage * q.queueSize * q.enqueueWriteSize
 			break
 		}
 
@@ -572,9 +572,9 @@ func (q *Queue[T]) initialize(startPosition uint64) {
 				panic(fmt.Sprintf("could not UnMarshal data, %s, %v", string(buffer), err))
 			}
 			if isStart {
-				for _, d := range data[q.headIndex-startIndex:] {
+				for _, d := range data[uint64(q.headIndex)-startIndex:] {
 					if d != nil {
-						q.queue <- &Message[T]{index: q.headIndex, data: d}
+						q.queue <- &Message[T]{name: q.name, index: q.headIndex, data: d}
 					}
 					q.headIndex++
 				}
@@ -582,7 +582,7 @@ func (q *Queue[T]) initialize(startPosition uint64) {
 			} else {
 				for _, d := range data {
 					if d != nil {
-						q.queue <- &Message[T]{index: q.headIndex, data: d}
+						q.queue <- &Message[T]{name: q.name, index: q.headIndex, data: d}
 					}
 					q.headIndex++
 				}
