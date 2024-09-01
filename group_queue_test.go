@@ -336,7 +336,7 @@ func TestGQEnqueueDequeueWithFunc(t *testing.T) {
 			go func(wg *sync.WaitGroup) {
 				defer wg.Done()
 				for 0 < totalDataNum {
-					err := gq.FuncAfterDequeue(3, f)
+					err := gq.FuncAfterDequeue(f)
 					if err != nil {
 						t.Errorf("dequeue failed: %v", err)
 					}
@@ -598,7 +598,7 @@ func TestGQBulkEnqueueDequeueWithFunc(t *testing.T) {
 			go func(wg *sync.WaitGroup) {
 				defer wg.Done()
 				for 0 < totalDataNum {
-					err := gq.FuncAfterBulkDequeue(3, tt.bulkSize, tt.lazy, f)
+					err := gq.FuncAfterBulkDequeue(tt.bulkSize, tt.lazy, f)
 					if err != nil {
 						t.Errorf("dequeue failed: %v", err)
 					}
