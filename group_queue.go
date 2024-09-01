@@ -39,7 +39,7 @@ type GroupQueue[T any] struct {
 	initializeBlock  chan struct{}
 	queues           map[string]*Queue[T]
 	sig              chan struct{}
-	mu               *sync.Mutex
+	mu               *sync.RWMutex
 }
 
 type bulkQueueChData[T any] struct {
@@ -108,7 +108,7 @@ func NewGroupQueue[T any](name string, opts ...Option) (*GroupQueue[T], error) {
 	maxIndexSize := queueSize * pageSize
 	initializeBlock := make(chan struct{})
 	queues := make(map[string]*Queue[T], 10)
-	var mu sync.Mutex
+	var mu sync.RWMutex
 	sig := make(chan struct{}, 1)
 
 	gq := GroupQueue[T]{
@@ -231,7 +231,7 @@ func (gq *GroupQueue[T]) BulkEnqueue(name string, data []*T) error {
 	for i < ld {
 		next := i + q.queueSize - q.Length()
 		if next == i {
-			time.After(100 * time.Microsecond)
+			time.Sleep(100 * time.Microsecond)
 			continue
 		}
 		if next >= ld {
@@ -270,9 +270,9 @@ func (gq *GroupQueue[T]) Dequeue(batch int) (chan *Message[T], error) {
 	var err error
 	mCh := make(chan *Message[T])
 	<-gq.sig
-	gq.mu.Lock()
+	gq.mu.RLock()
 	nameQueueLenMap := gq.lengthWithNotEmpty()
-	gq.mu.Unlock()
+	gq.mu.RUnlock()
 	go func() {
 		defer close(mCh)
 		for len(nameQueueLenMap) > 0 {
@@ -343,9 +343,9 @@ func (gq *GroupQueue[T]) BulkDequeue(batch int, size int, lazy time.Duration) (c
 				msCh <- messages
 				return
 			case <-gq.sig:
-				gq.mu.Lock()
+				gq.mu.RLock()
 				nameQueueLenMap := gq.lengthWithNotEmpty()
-				gq.mu.Unlock()
+				gq.mu.RUnlock()
 				for len(nameQueueLenMap) > 0 {
 					for name, length := range nameQueueLenMap {
 						q, ok := gq.queues[name]
@@ -405,9 +405,9 @@ func (gq *GroupQueue[T]) FuncAfterDequeue(batch int, f func(*T) error) error {
 	<-gq.sig
 
 	// check name and queue length
-	gq.mu.Lock()
+	gq.mu.RLock()
 	nameQueueLenMap := gq.lengthWithNotEmpty()
-	gq.mu.Unlock()
+	gq.mu.RUnlock()
 
 	for len(nameQueueLenMap) > 0 {
 		for name, length := range nameQueueLenMap {
@@ -488,9 +488,9 @@ func (gq *GroupQueue[T]) FuncAfterBulkDequeue(batch int, size int, lazy time.Dur
 				}
 				return
 			case <-gq.sig:
-				gq.mu.Lock()
+				gq.mu.RLock()
 				nameQueueLenMap := gq.lengthWithNotEmpty()
-				gq.mu.Unlock()
+				gq.mu.RUnlock()
 				for len(nameQueueLenMap) > 0 {
 					for name, length := range nameQueueLenMap {
 						q, ok := gq.queues[name]
@@ -622,14 +622,14 @@ func (gq *GroupQueue[T]) sendSignal() {
 //     If all queues are closed successfully, nil is returned.
 func (gq *GroupQueue[T]) CloseQueue() error {
 	var err error
-	gq.mu.Lock()
+	gq.mu.RLock()
 	for _, q := range gq.queues {
 		closeErr := q.CloseQueue()
 		if closeErr != nil {
 			err = errors.Join(err, closeErr)
 		}
 	}
-	gq.mu.Unlock()
+	gq.mu.RUnlock()
 	return err
 }
 
@@ -649,9 +649,9 @@ func (gq *GroupQueue[T]) CloseQueue() error {
 func (gq *GroupQueue[T]) CloseIndex(interval time.Duration) error {
 	var err error
 	for {
-		gq.mu.Lock()
+		gq.mu.RLock()
 		nameQueueLenMap := gq.lengthWithNotEmpty()
-		gq.mu.Unlock()
+		gq.mu.RUnlock()
 		if len(nameQueueLenMap) == 0 {
 			break
 		}

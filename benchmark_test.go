@@ -444,9 +444,9 @@ func BenchmarkGroupQueueEnqueueDequeue10_3Group(b *testing.B) {
 	data := createData(10)
 	testQueues := []string{"queue1", "queue2", "queue3"}
 	batch := 10
-	total := len(data) * len(testQueues)
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
+		total := len(data) * len(testQueues)
 		gq, _ := ffq.NewGroupQueue[BenchmarkData](
 			"benchmark",
 			ffq.WithFileDir(dir),
@@ -463,8 +463,8 @@ func BenchmarkGroupQueueEnqueueDequeue10_3Group(b *testing.B) {
 		b.StartTimer()
 		go func(wg *sync.WaitGroup) {
 			defer wg.Done()
-			wgEnqueue.Add(len(testQueues))
 			for _, tq := range testQueues {
+				wgEnqueue.Add(1)
 				go func(wg *sync.WaitGroup, name string) {
 					defer wg.Done()
 					for _, d := range data {
@@ -502,9 +502,9 @@ func BenchmarkGroupQueueEnqueueDequeue100_3Group(b *testing.B) {
 	data := createData(100)
 	testQueues := []string{"queue1", "queue2", "queue3"}
 	batch := 10
-	total := len(data) * len(testQueues)
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
+		total := len(data) * len(testQueues)
 		gq, _ := ffq.NewGroupQueue[BenchmarkData](
 			"benchmark",
 			ffq.WithFileDir(dir),
@@ -521,8 +521,8 @@ func BenchmarkGroupQueueEnqueueDequeue100_3Group(b *testing.B) {
 		b.StartTimer()
 		go func(wg *sync.WaitGroup) {
 			defer wg.Done()
-			wgEnqueue.Add(len(testQueues))
 			for _, tq := range testQueues {
+				wgEnqueue.Add(1)
 				go func(wg *sync.WaitGroup, name string) {
 					defer wg.Done()
 					for _, d := range data {
@@ -560,9 +560,9 @@ func BenchmarkGroupQueueEnqueueDequeue1000_3Group(b *testing.B) {
 	data := createData(1000)
 	testQueues := []string{"queue1", "queue2", "queue3"}
 	batch := 10
-	total := len(data) * len(testQueues)
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
+		total := len(data) * len(testQueues)
 		gq, _ := ffq.NewGroupQueue[BenchmarkData](
 			"benchmark",
 			ffq.WithFileDir(dir),
@@ -579,8 +579,8 @@ func BenchmarkGroupQueueEnqueueDequeue1000_3Group(b *testing.B) {
 		b.StartTimer()
 		go func(wg *sync.WaitGroup) {
 			defer wg.Done()
-			wgEnqueue.Add(len(testQueues))
 			for _, tq := range testQueues {
+				wgEnqueue.Add(1)
 				go func(wg *sync.WaitGroup, name string) {
 					defer wg.Done()
 					for _, d := range data {
@@ -618,9 +618,9 @@ func BenchmarkGroupQueueEnqueueDequeue10000_3Group(b *testing.B) {
 	data := createData(10000)
 	testQueues := []string{"queue1", "queue2", "queue3"}
 	batch := 10
-	total := len(data) * len(testQueues)
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
+		total := len(data) * len(testQueues)
 		gq, _ := ffq.NewGroupQueue[BenchmarkData](
 			"benchmark",
 			ffq.WithFileDir(dir),
@@ -637,8 +637,8 @@ func BenchmarkGroupQueueEnqueueDequeue10000_3Group(b *testing.B) {
 		b.StartTimer()
 		go func(wg *sync.WaitGroup) {
 			defer wg.Done()
-			wgEnqueue.Add(len(testQueues))
 			for _, tq := range testQueues {
+				wgEnqueue.Add(1)
 				go func(wg *sync.WaitGroup, name string) {
 					defer wg.Done()
 					for _, d := range data {
@@ -678,9 +678,9 @@ func BenchmarkGroupQueueBulkEnqueueDequeue10_3Group(b *testing.B) {
 	data := createData(10)
 	testQueues := []string{"queue1", "queue2", "queue3"}
 	batch := 10
-	total := len(data) * len(testQueues)
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
+		total := len(data) * len(testQueues)
 		gq, _ := ffq.NewGroupQueue[BenchmarkData](
 			"benchmark",
 			ffq.WithFileDir(dir),
@@ -697,8 +697,8 @@ func BenchmarkGroupQueueBulkEnqueueDequeue10_3Group(b *testing.B) {
 		b.StartTimer()
 		go func(wg *sync.WaitGroup) {
 			defer wg.Done()
-			wgEnqueue.Add(len(testQueues))
 			for _, tq := range testQueues {
+				wgEnqueue.Add(1)
 				go func(wg *sync.WaitGroup, name string) {
 					defer wg.Done()
 					gq.BulkEnqueue(name, data)
@@ -736,9 +736,9 @@ func BenchmarkGroupQueueBulkEnqueueDequeue100_3Group(b *testing.B) {
 	data := createData(100)
 	testQueues := []string{"queue1", "queue2", "queue3"}
 	batch := 10
-	total := len(data) * len(testQueues)
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
+		total := len(data) * len(testQueues)
 		gq, _ := ffq.NewGroupQueue[BenchmarkData](
 			"benchmark",
 			ffq.WithFileDir(dir),
@@ -755,8 +755,8 @@ func BenchmarkGroupQueueBulkEnqueueDequeue100_3Group(b *testing.B) {
 		b.StartTimer()
 		go func(wg *sync.WaitGroup) {
 			defer wg.Done()
-			wgEnqueue.Add(len(testQueues))
 			for _, tq := range testQueues {
+				wgEnqueue.Add(1)
 				go func(wg *sync.WaitGroup, name string) {
 					defer wg.Done()
 					gq.BulkEnqueue(name, data)
@@ -794,9 +794,9 @@ func BenchmarkGroupQueueBulkEnqueueDequeue1000_3Group(b *testing.B) {
 	data := createData(1000)
 	testQueues := []string{"queue1", "queue2", "queue3"}
 	batch := 10
-	total := len(data) * len(testQueues)
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
+		total := len(data) * len(testQueues)
 		gq, _ := ffq.NewGroupQueue[BenchmarkData](
 			"benchmark",
 			ffq.WithFileDir(dir),
@@ -813,8 +813,8 @@ func BenchmarkGroupQueueBulkEnqueueDequeue1000_3Group(b *testing.B) {
 		b.StartTimer()
 		go func(wg *sync.WaitGroup) {
 			defer wg.Done()
-			wgEnqueue.Add(len(testQueues))
 			for _, tq := range testQueues {
+				wgEnqueue.Add(1)
 				go func(wg *sync.WaitGroup, name string) {
 					defer wg.Done()
 					gq.BulkEnqueue(name, data)
@@ -852,9 +852,9 @@ func BenchmarkGroupQueueBulkEnqueueDequeue10000_3Group(b *testing.B) {
 	data := createData(10000)
 	testQueues := []string{"queue1", "queue2", "queue3"}
 	batch := 10
-	total := len(data) * len(testQueues)
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
+		total := len(data) * len(testQueues)
 		gq, _ := ffq.NewGroupQueue[BenchmarkData](
 			"benchmark",
 			ffq.WithFileDir(dir),
@@ -871,8 +871,8 @@ func BenchmarkGroupQueueBulkEnqueueDequeue10000_3Group(b *testing.B) {
 		b.StartTimer()
 		go func(wg *sync.WaitGroup) {
 			defer wg.Done()
-			wgEnqueue.Add(len(testQueues))
 			for _, tq := range testQueues {
+				wgEnqueue.Add(1)
 				go func(wg *sync.WaitGroup, name string) {
 					defer wg.Done()
 					gq.BulkEnqueue(name, data)

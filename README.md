@@ -29,22 +29,24 @@ A dataset with 12 keys was prepared, where each key has corresponding string, in
 goos: linux
 goarch: arm64
 pkg: github.com/nihiyama/ffq
-BenchmarkSimpleQueueEnqueueDequeue10                        1651            754365 ns/op          686282 B/op        335 allocs/op
-BenchmarkSimpleQueueEnqueueDequeue100                        100          10570790 ns/op         6867607 B/op       3500 allocs/op
-BenchmarkSimpleQueueEnqueueDequeue1000                         9         119574377 ns/op        69265865 B/op      50915 allocs/op
-BenchmarkSimpleQueueEnqueueDequeue10000                        1        1726579573 ns/op        748276128 B/op   2004173 allocs/op
-BenchmarkSimpleQueueBulkEnqueueDequeue10                   12860             89705 ns/op           92442 B/op        283 allocs/op
-BenchmarkSimpleQueueBulkEnqueueDequeue100                   1122            983212 ns/op          698561 B/op       2737 allocs/op
-BenchmarkSimpleQueueBulkEnqueueDequeue1000                   138           8275012 ns/op         6805284 B/op      28304 allocs/op
-BenchmarkSimpleQueueBulkEnqueueDequeue10000                   12          89143218 ns/op        74057737 B/op     410624 allocs/op
-BenchmarkGroupQueueEnqueueDequeue10_3Group                   336           3214467 ns/op         2287377 B/op       1087 allocs/op
-BenchmarkGroupQueueEnqueueDequeue100_3Group                   38          29182965 ns/op        20823214 B/op      10039 allocs/op
-BenchmarkGroupQueueEnqueueDequeue1000_3Group                   4         310158024 ns/op        207489608 B/op    135722 allocs/op
-BenchmarkGroupQueueEnqueueDequeue10000_3Group                  1        4208820685 ns/op        2125512056 B/op  2684781 allocs/op
-BenchmarkGroupQueueBulkEnqueueDequeue10_3Group               777           1501167 ns/op          502994 B/op        947 allocs/op
-BenchmarkGroupQueueBulkEnqueueDequeue100_3Group              327           3510217 ns/op         2318779 B/op       8307 allocs/op
-BenchmarkGroupQueueBulkEnqueueDequeue1000_3Group              49          23034984 ns/op        20599642 B/op      84641 allocs/op
-BenchmarkGroupQueueBulkEnqueueDequeue10000_3Group              1        1021066285 ns/op        712936816 B/op   9052384 allocs/op
+BenchmarkSimpleQueueEnqueueDequeue10                        1788            690305 ns/op          686282 B/op        335 allocs/op
+BenchmarkSimpleQueueEnqueueDequeue100                        132          11015562 ns/op         6866321 B/op       3474 allocs/op
+BenchmarkSimpleQueueEnqueueDequeue1000                         8         131244262 ns/op        69347153 B/op      53027 allocs/op
+BenchmarkSimpleQueueEnqueueDequeue10000                        1        1607996331 ns/op        748274432 B/op   2004167 allocs/op
+BenchmarkSimpleQueueBulkEnqueueDequeue10                   12788             91125 ns/op           92442 B/op        283 allocs/op
+BenchmarkSimpleQueueBulkEnqueueDequeue100                   1125            957756 ns/op          698559 B/op       2737 allocs/op
+BenchmarkSimpleQueueBulkEnqueueDequeue1000                   135           8236663 ns/op         6807223 B/op      28329 allocs/op
+BenchmarkSimpleQueueBulkEnqueueDequeue10000                   12          92946453 ns/op        74057826 B/op     410625 allocs/op
+BenchmarkGroupQueueEnqueueDequeue10_3Group                   319           3923860 ns/op         2289596 B/op       1140 allocs/op
+BenchmarkGroupQueueEnqueueDequeue100_3Group                   32          36434364 ns/op        20834059 B/op      10643 allocs/op
+BenchmarkGroupQueueEnqueueDequeue1000_3Group                   3         370326426 ns/op        208035389 B/op    152912 allocs/op
+BenchmarkGroupQueueEnqueueDequeue10000_3Group                  1        4376431304 ns/op        2125482792 B/op  2684600 allocs/op
+BenchmarkGroupQueueBulkEnqueueDequeue10_3Group                84          12465048 ns/op          504824 B/op        967 allocs/op
+BenchmarkGroupQueueBulkEnqueueDequeue100_3Group               93          13596804 ns/op         2326885 B/op       8401 allocs/op
+BenchmarkGroupQueueBulkEnqueueDequeue1000_3Group              37          31397757 ns/op        20666928 B/op      85736 allocs/op
+BenchmarkGroupQueueBulkEnqueueDequeue10000_3Group              4         314572069 ns/op        228403846 B/op   1231677 allocs/op
+PASS
+ok      github.com/nihiyama/ffq 53.625s
 ```
 
 ## Note
