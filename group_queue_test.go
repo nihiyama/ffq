@@ -199,7 +199,7 @@ func TestGQEnqueueDequeue(t *testing.T) {
 				defer wg.Done()
 				i := 0
 				for i < len(tt.enqueueData)*3 {
-					messages, err := gq.Dequeue(3)
+					messages, err := gq.Dequeue()
 					if err != nil {
 						t.Errorf("dequeue failed: %v", err)
 					}
@@ -460,7 +460,7 @@ func TestGQBulkEnqueueDequeue(t *testing.T) {
 				defer wg.Done()
 				i := 0
 				for i < len(tt.enqueueData)*3 {
-					messages, err := gq.BulkDequeue(3, tt.bulkSize, tt.lazy)
+					messages, err := gq.BulkDequeue(tt.bulkSize, tt.lazy)
 					if err != nil {
 						t.Errorf("dequeue failed: %v", err)
 					}
