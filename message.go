@@ -8,8 +8,8 @@ package ffq
 //   - index: The index of the message in the queue.
 //   - data: A pointer to the data associated with the message.
 type Message[T any] struct {
-	name  string
 	index int
+	name  string
 	data  *T
 }
 

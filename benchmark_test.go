@@ -81,6 +81,7 @@ func BenchmarkSimpleQueueEnqueueDequeue(b *testing.B) {
 		b.Run(fmt.Sprintf("Size%d", tt), func(b *testing.B) {
 			dir := fmt.Sprintf("testdata/benchmark/simple_queue/single/%d/ffq", tt)
 			data := createData(tt)
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
 				q, _ := ffq.NewQueue[BenchmarkData](
@@ -131,6 +132,7 @@ func BenchmarkSimpleQueueBulkEnqueueDequeue(b *testing.B) {
 		b.Run(fmt.Sprintf("Size%d", tt), func(b *testing.B) {
 			dir := fmt.Sprintf("testdata/benchmark/simple_queue/bulk/%d/ffq", tt)
 			data := createData(tt)
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
 				q, _ := ffq.NewQueue[BenchmarkData](
@@ -180,6 +182,7 @@ func BenchmarkGroupQueueEnqueueDequeue_3Group(b *testing.B) {
 		b.Run(fmt.Sprintf("Size%d", tt), func(b *testing.B) {
 			dir := fmt.Sprintf("testdata/benchmark/group_queue/single/%d/ffq", tt)
 			data := createData(tt)
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
 				total := len(data) * len(testQueues)
@@ -245,6 +248,7 @@ func BenchmarkGroupQueueBulkEnqueueDequeue_3Group(b *testing.B) {
 		b.Run(fmt.Sprintf("Size%d", tt), func(b *testing.B) {
 			dir := fmt.Sprintf("testdata/benchmark/group_queue/bulk/%d/ffq", tt)
 			data := createData(tt)
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
 				total := len(data) * len(testQueues)

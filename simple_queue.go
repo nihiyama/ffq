@@ -38,17 +38,17 @@ var (
 //   - jsonDecoder: A function to decode data from JSON.
 //   - initializeBlock: A channel to block until initialization is complete.
 type Queue[T any] struct {
-	name             string
-	fileDir          string
+	dataFixedLength  uint64
+	maxFileSize      uint64
 	queueSize        int
 	enqueueWriteSize int
 	pageSize         int
-	dataFixedLength  uint64
-	maxFileSize      uint64
 	maxIndexSize     int
-	queue            chan *Message[T]
 	headIndex        int
 	currentPage      int
+	name             string
+	fileDir          string
+	queue            chan *Message[T]
 	queueFile        *os.File
 	indexFile        *os.File
 	jsonEncoder      func(v any) ([]byte, error)

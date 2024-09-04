@@ -2,6 +2,7 @@
 package ffq
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -25,20 +26,22 @@ import (
 //   - maxIndexSize: The maximum size of the index file.
 //   - initializeBlock: A channel to block until initialization is complete.
 //   - queues: A map of queue names to their respective Queue instances.
-//   - sig: A channel used for signaling between operations.
+//   - enqueueSig: A channel used for signaling between operations.
 //   - mu: A mutex for synchronizing access to the queues.
 type GroupQueue[T any] struct {
-	name             string
-	fileDir          string
+	dataFixedLength  uint64
+	maxFileSize      uint64
 	queueSize        int
 	enqueueWriteSize int
 	pageSize         int
-	dataFixedLength  uint64
-	maxFileSize      uint64
 	maxIndexSize     int
-	initializeBlock  chan struct{}
+	name             string
+	fileDir          string
 	queues           map[string]*Queue[T]
-	sig              chan struct{}
+	jsonEncoder      func(v any) ([]byte, error)
+	jsonDecoder      func(data []byte, v any) error
+	initializeBlock  chan struct{}
+	enqueueSig       chan struct{}
 	closeSig         chan struct{}
 	mu               *sync.RWMutex
 }
@@ -105,12 +108,22 @@ func NewGroupQueue[T any](name string, opts ...Option) (*GroupQueue[T], error) {
 		dataFixedLength = *options.dataFixedLength
 	}
 
+	var jsonEncoder func(v any) ([]byte, error) = json.Marshal
+	if options.jsonEncoder != nil {
+		jsonEncoder = *options.jsonEncoder
+	}
+
+	var jsonDecoder func(data []byte, v any) error = json.Unmarshal
+	if options.jsonDecoder != nil {
+		jsonDecoder = *options.jsonDecoder
+	}
+
 	maxFileSize := uint64(queueSize) * dataFixedLength
 	maxIndexSize := queueSize * pageSize
 	initializeBlock := make(chan struct{})
 	queues := make(map[string]*Queue[T], 10)
 	var mu sync.RWMutex
-	sig := make(chan struct{}, 1)
+	enqueueSig := make(chan struct{}, 1)
 	closeSig := make(chan struct{}, 1)
 
 	gq := GroupQueue[T]{
@@ -122,10 +135,12 @@ func NewGroupQueue[T any](name string, opts ...Option) (*GroupQueue[T], error) {
 		dataFixedLength:  dataFixedLength,
 		maxFileSize:      maxFileSize,
 		maxIndexSize:     maxIndexSize,
+		jsonEncoder:      jsonEncoder,
+		jsonDecoder:      jsonDecoder,
 		initializeBlock:  initializeBlock,
 		queues:           queues,
 		mu:               &mu,
-		sig:              sig,
+		enqueueSig:       enqueueSig,
 		closeSig:         closeSig,
 	}
 
@@ -158,6 +173,8 @@ func (gq *GroupQueue[T]) addQueue(name string) error {
 		WithQueueSize(gq.queueSize),
 		WithEnqueueWriteSize(gq.enqueueWriteSize),
 		WithDataFixedLength(gq.dataFixedLength),
+		WithJSONEncoder(gq.jsonEncoder),
+		WithJSONDecoder(gq.jsonDecoder),
 	)
 	if err != nil {
 		return err
@@ -274,10 +291,10 @@ func (gq *GroupQueue[T]) Dequeue() (chan *Message[T], error) {
 	mCh := make(chan *Message[T])
 	// if queue has been closed, return ErrQueueClose
 	select {
-	case <-gq.sig:
+	case <-gq.enqueueSig:
 	case <-gq.closeSig:
 		select {
-		case <-gq.sig:
+		case <-gq.enqueueSig:
 			gq.closeSig <- struct{}{}
 		default:
 			return nil, ErrQueueClose
@@ -352,10 +369,10 @@ func (gq *GroupQueue[T]) BulkDequeue(size int, lazy time.Duration) (chan []*Mess
 
 	// if queue has been closed, return ErrQueueClose
 	select {
-	case <-gq.sig:
+	case <-gq.enqueueSig:
 	case <-gq.closeSig:
 		select {
-		case <-gq.sig:
+		case <-gq.enqueueSig:
 			gq.closeSig <- struct{}{}
 		default:
 			return nil, ErrQueueClose
@@ -365,14 +382,14 @@ func (gq *GroupQueue[T]) BulkDequeue(size int, lazy time.Duration) (chan []*Mess
 		defer close(msCh)
 		timer := time.After(lazy)
 		resetMessages()
-		// add signal because get signal first
+		// add enqueueSignal because get enqueueSignal first
 		gq.sendSignal()
 		for {
 			select {
 			case <-timer:
 				msCh <- messages
 				return
-			case <-gq.sig:
+			case <-gq.enqueueSig:
 				nameQueueLenMap := gq.lengthWithNotEmpty()
 				var queueWg sync.WaitGroup
 				for name, length := range nameQueueLenMap {
@@ -420,10 +437,10 @@ func (gq *GroupQueue[T]) FuncAfterDequeue(f func(*T) error) error {
 
 	// if queue has been closed, return ErrQueueClose
 	select {
-	case <-gq.sig:
+	case <-gq.enqueueSig:
 	case <-gq.closeSig:
 		select {
-		case <-gq.sig:
+		case <-gq.enqueueSig:
 			gq.closeSig <- struct{}{}
 		default:
 			return ErrQueueClose
@@ -509,10 +526,10 @@ func (gq *GroupQueue[T]) FuncAfterBulkDequeue(size int, lazy time.Duration, f fu
 
 	// if queue has been closed, return ErrQueueClose
 	select {
-	case <-gq.sig:
+	case <-gq.enqueueSig:
 	case <-gq.closeSig:
 		select {
-		case <-gq.sig:
+		case <-gq.enqueueSig:
 			gq.closeSig <- struct{}{}
 		default:
 			return ErrQueueClose
@@ -524,7 +541,7 @@ func (gq *GroupQueue[T]) FuncAfterBulkDequeue(size int, lazy time.Duration, f fu
 		timer := time.After(lazy)
 		nameQueueLenMap := gq.Length()
 		resetData(len(nameQueueLenMap))
-		// add signal because get signal first
+		// add enqueueSignal because get enqueueSignal first
 		gq.sendSignal()
 		for {
 			select {
@@ -534,7 +551,7 @@ func (gq *GroupQueue[T]) FuncAfterBulkDequeue(size int, lazy time.Duration, f fu
 					indices: indices,
 				}
 				return
-			case <-gq.sig:
+			case <-gq.enqueueSig:
 				nameQueueLenMap := gq.lengthWithNotEmpty()
 				var queueWg sync.WaitGroup
 				for name, length := range nameQueueLenMap {
@@ -635,7 +652,7 @@ func (gq *GroupQueue[T]) WaitInitialize() {
 
 func (gq *GroupQueue[T]) sendSignal() {
 	select {
-	case gq.sig <- struct{}{}:
+	case gq.enqueueSig <- struct{}{}:
 	default:
 	}
 }
