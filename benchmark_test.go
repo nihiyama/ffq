@@ -214,9 +214,12 @@ func BenchmarkGroupQueueEnqueueDequeue_3Group(b *testing.B) {
 
 				go func(wg *sync.WaitGroup) {
 					defer wg.Done()
-					for 0 < total {
+					for {
 						mc, err := gq.Dequeue()
 						if err != nil {
+							if ffq.IsErrQueueClose(err) {
+								gq.CloseIndex()
+							}
 							return
 						}
 						for m := range mc {
@@ -224,7 +227,6 @@ func BenchmarkGroupQueueEnqueueDequeue_3Group(b *testing.B) {
 							total--
 						}
 					}
-					gq.CloseIndex(100 * time.Microsecond)
 				}(&wg)
 				wg.Wait()
 				b.StopTimer()
@@ -277,6 +279,9 @@ func BenchmarkGroupQueueBulkEnqueueDequeue_3Group(b *testing.B) {
 					for 0 < total {
 						msc, err := gq.BulkDequeue(size, lazy)
 						if err != nil {
+							if ffq.IsErrQueueClose(err) {
+								gq.CloseIndex()
+							}
 							return
 						}
 						for ms := range msc {

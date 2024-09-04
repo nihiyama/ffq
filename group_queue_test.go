@@ -82,7 +82,7 @@ func TestNewGroupQueue(t *testing.T) {
 			if err := actual.CloseQueue(); err != nil {
 				t.Errorf("CloseQueue failed: %v", err)
 			}
-			if err := actual.CloseIndex(100 * time.Millisecond); err != nil {
+			if err := actual.CloseIndex(); err != nil {
 				t.Errorf("CloseIndex failed: %v", err)
 			}
 		})
@@ -198,10 +198,18 @@ func TestGQEnqueueDequeue(t *testing.T) {
 			go func(wg *sync.WaitGroup) {
 				defer wg.Done()
 				i := 0
-				for i < len(tt.enqueueData)*3 {
+				for {
 					messages, err := gq.Dequeue()
 					if err != nil {
-						t.Errorf("dequeue failed: %v", err)
+						if IsErrQueueClose(err) {
+							err = gq.CloseIndex()
+							if err != nil {
+								t.Errorf("Failed to close index: %v", err)
+							}
+							break
+						} else {
+							t.Errorf("dequeue failed: %v", err)
+						}
 					}
 					for m := range messages {
 						m.Data()
@@ -210,10 +218,6 @@ func TestGQEnqueueDequeue(t *testing.T) {
 						gq.UpdateIndex(m)
 						i++
 					}
-				}
-				err = gq.CloseIndex(100 * time.Millisecond)
-				if err != nil {
-					t.Errorf("Failed to close index: %v", err)
 				}
 			}(&wg)
 			wg.Wait()
@@ -335,15 +339,19 @@ func TestGQEnqueueDequeueWithFunc(t *testing.T) {
 			wg.Add(1)
 			go func(wg *sync.WaitGroup) {
 				defer wg.Done()
-				for 0 < totalDataNum {
+				for {
 					err := gq.FuncAfterDequeue(f)
 					if err != nil {
-						t.Errorf("dequeue failed: %v", err)
+						if IsErrQueueClose(err) {
+							err = gq.CloseIndex()
+							if err != nil {
+								t.Errorf("Failed to close index: %v", err)
+							}
+							break
+						} else {
+							t.Errorf("dequeue failed: %v", err)
+						}
 					}
-				}
-				err = gq.CloseIndex(100 * time.Millisecond)
-				if err != nil {
-					t.Errorf("Failed to close index: %v", err)
 				}
 			}(&wg)
 			wg.Wait()
@@ -459,10 +467,18 @@ func TestGQBulkEnqueueDequeue(t *testing.T) {
 			go func(wg *sync.WaitGroup) {
 				defer wg.Done()
 				i := 0
-				for i < len(tt.enqueueData)*3 {
+				for {
 					messages, err := gq.BulkDequeue(tt.bulkSize, tt.lazy)
 					if err != nil {
-						t.Errorf("dequeue failed: %v", err)
+						if IsErrQueueClose(err) {
+							err = gq.CloseIndex()
+							if err != nil {
+								t.Errorf("Failed to close index: %v", err)
+							}
+							break
+						} else {
+							t.Errorf("dequeue failed: %v", err)
+						}
 					}
 					for ms := range messages {
 						for _, m := range ms {
@@ -473,10 +489,6 @@ func TestGQBulkEnqueueDequeue(t *testing.T) {
 							i++
 						}
 					}
-				}
-				err = gq.CloseIndex(100 * time.Millisecond)
-				if err != nil {
-					t.Errorf("Failed to close index: %v", err)
 				}
 			}(&wg)
 			wg.Wait()
@@ -597,15 +609,19 @@ func TestGQBulkEnqueueDequeueWithFunc(t *testing.T) {
 			wg.Add(1)
 			go func(wg *sync.WaitGroup) {
 				defer wg.Done()
-				for 0 < totalDataNum {
+				for {
 					err := gq.FuncAfterBulkDequeue(tt.bulkSize, tt.lazy, f)
 					if err != nil {
-						t.Errorf("dequeue failed: %v", err)
+						if IsErrQueueClose(err) {
+							err = gq.CloseIndex()
+							if err != nil {
+								t.Errorf("Failed to close index: %v", err)
+							}
+							break
+						} else {
+							t.Errorf("dequeue failed: %v", err)
+						}
 					}
-				}
-				err = gq.CloseIndex(100 * time.Millisecond)
-				if err != nil {
-					t.Errorf("Failed to close index: %v", err)
 				}
 			}(&wg)
 			wg.Wait()
