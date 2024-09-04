@@ -39,6 +39,7 @@ type GroupQueue[T any] struct {
 	initializeBlock  chan struct{}
 	queues           map[string]*Queue[T]
 	sig              chan struct{}
+	closeSig         chan struct{}
 	mu               *sync.RWMutex
 }
 
@@ -110,6 +111,7 @@ func NewGroupQueue[T any](name string, opts ...Option) (*GroupQueue[T], error) {
 	queues := make(map[string]*Queue[T], 10)
 	var mu sync.RWMutex
 	sig := make(chan struct{}, 1)
+	closeSig := make(chan struct{}, 1)
 
 	gq := GroupQueue[T]{
 		name:             name,
@@ -124,6 +126,7 @@ func NewGroupQueue[T any](name string, opts ...Option) (*GroupQueue[T], error) {
 		queues:           queues,
 		mu:               &mu,
 		sig:              sig,
+		closeSig:         closeSig,
 	}
 
 	go func() {
@@ -269,17 +272,24 @@ func (gq *GroupQueue[T]) BulkEnqueue(name string, data []*T) error {
 func (gq *GroupQueue[T]) Dequeue() (chan *Message[T], error) {
 	var err error
 	mCh := make(chan *Message[T])
-	<-gq.sig
+	// if queue has been closed, return ErrQueueClose
+	select {
+	case <-gq.sig:
+	case <-gq.closeSig:
+		select {
+		case <-gq.sig:
+			gq.closeSig <- struct{}{}
+		default:
+			return nil, ErrQueueClose
+		}
+	}
 	nameQueueLenMap := gq.lengthWithNotEmpty()
 	go func() {
 		defer close(mCh)
 		var queueWg sync.WaitGroup
 		for name, length := range nameQueueLenMap {
-			q, gqErr := gq.getQueue(name)
-			if gqErr != nil {
-				err = errors.Join(err, gqErr)
-				continue
-			}
+			// no err will occur because queue existence's is guaranteed.
+			q, _ := gq.getQueue(name)
 			queueWg.Add(1)
 			go func(wg *sync.WaitGroup, name string, length int, queue *Queue[T]) {
 				defer wg.Done()
@@ -327,20 +337,30 @@ func (gq *GroupQueue[T]) BulkDequeue(size int, lazy time.Duration) (chan []*Mess
 
 	appendMessages := func(m *Message[T]) {
 		messageMu.Lock()
+		defer messageMu.Unlock()
 		messages = append(messages, m)
 		if len(messages) == size {
 			msCh <- messages
 			messages = make([]*Message[T], 0, size)
 		}
-		messageMu.Unlock()
 	}
 	resetMessages := func() {
 		messageMu.Lock()
+		defer messageMu.Unlock()
 		messages = make([]*Message[T], 0, size)
-		messageMu.Unlock()
 	}
-	<-gq.sig
 
+	// if queue has been closed, return ErrQueueClose
+	select {
+	case <-gq.sig:
+	case <-gq.closeSig:
+		select {
+		case <-gq.sig:
+			gq.closeSig <- struct{}{}
+		default:
+			return nil, ErrQueueClose
+		}
+	}
 	go func() {
 		defer close(msCh)
 		timer := time.After(lazy)
@@ -356,10 +376,8 @@ func (gq *GroupQueue[T]) BulkDequeue(size int, lazy time.Duration) (chan []*Mess
 				nameQueueLenMap := gq.lengthWithNotEmpty()
 				var queueWg sync.WaitGroup
 				for name, length := range nameQueueLenMap {
-					q, gqErr := gq.getQueue(name)
-					if gqErr != nil {
-						err = errors.Join(err, gqErr)
-					}
+					// no err will occur because queue existence's is guaranteed.
+					q, _ := gq.getQueue(name)
 					queueWg.Add(1)
 					go func(wg *sync.WaitGroup, name string, length int, queue *Queue[T]) {
 						defer wg.Done()
@@ -400,18 +418,23 @@ func (gq *GroupQueue[T]) BulkDequeue(size int, lazy time.Duration) (chan []*Mess
 func (gq *GroupQueue[T]) FuncAfterDequeue(f func(*T) error) error {
 	var err error
 
-	<-gq.sig
-
+	// if queue has been closed, return ErrQueueClose
+	select {
+	case <-gq.sig:
+	case <-gq.closeSig:
+		select {
+		case <-gq.sig:
+			gq.closeSig <- struct{}{}
+		default:
+			return ErrQueueClose
+		}
+	}
 	// check name and queue length
 	nameQueueLenMap := gq.lengthWithNotEmpty()
-
 	var queueWg sync.WaitGroup
 	for name, length := range nameQueueLenMap {
-		q, gqErr := gq.getQueue(name)
-		if gqErr != nil {
-			err = errors.Join(err, gqErr)
-			continue
-		}
+		// no err will occur because queue existence's is guaranteed.
+		q, _ := gq.getQueue(name)
 		queueWg.Add(1)
 		go func(wg *sync.WaitGroup, name string, length int, queue *Queue[T]) {
 			defer wg.Done()
@@ -466,6 +489,7 @@ func (gq *GroupQueue[T]) FuncAfterBulkDequeue(size int, lazy time.Duration, f fu
 
 	appendData := func(m *Message[T]) {
 		dataMu.Lock()
+		defer dataMu.Unlock()
 		indices[m.name] = m.index
 		data = append(data, m.data)
 		if len(data) == size {
@@ -475,16 +499,25 @@ func (gq *GroupQueue[T]) FuncAfterBulkDequeue(size int, lazy time.Duration, f fu
 			}
 			data = make([]*T, 0, size)
 		}
-		dataMu.Unlock()
 	}
 	resetData := func(indexLength int) {
 		dataMu.Lock()
+		defer dataMu.Unlock()
 		data = make([]*T, 0, size)
 		indices = make(map[string]int, indexLength)
-		dataMu.Unlock()
 	}
 
-	<-gq.sig
+	// if queue has been closed, return ErrQueueClose
+	select {
+	case <-gq.sig:
+	case <-gq.closeSig:
+		select {
+		case <-gq.sig:
+			gq.closeSig <- struct{}{}
+		default:
+			return ErrQueueClose
+		}
+	}
 
 	go func() {
 		defer close(dataCh)
@@ -505,11 +538,8 @@ func (gq *GroupQueue[T]) FuncAfterBulkDequeue(size int, lazy time.Duration, f fu
 				nameQueueLenMap := gq.lengthWithNotEmpty()
 				var queueWg sync.WaitGroup
 				for name, length := range nameQueueLenMap {
-					q, gqErr := gq.getQueue(name)
-					if gqErr != nil {
-						err = errors.Join(err, gqErr)
-						continue
-					}
+					// no err will occur because queue existence's is guaranteed.
+					q, _ := gq.getQueue(name)
 					queueWg.Add(1)
 					go func(wg *sync.WaitGroup, name string, length int, queue *Queue[T]) {
 						defer wg.Done()
@@ -631,13 +661,16 @@ func (gq *GroupQueue[T]) getQueue(name string) (*Queue[T], error) {
 //     If all queues are closed successfully, nil is returned.
 func (gq *GroupQueue[T]) CloseQueue() error {
 	var err error
-	gq.mu.RLock()
-	defer gq.mu.RUnlock()
+	gq.mu.Lock()
+	defer gq.mu.Unlock()
 	for _, q := range gq.queues {
 		closeErr := q.CloseQueue()
 		if closeErr != nil {
 			err = errors.Join(err, closeErr)
 		}
+	}
+	if err == nil {
+		gq.closeSig <- struct{}{}
 	}
 	return err
 }
@@ -655,16 +688,10 @@ func (gq *GroupQueue[T]) CloseQueue() error {
 // Returns:
 //   - error: An error that accumulates any issues that occurred while closing the index files.
 //     If all index files are closed successfully, nil is returned.
-func (gq *GroupQueue[T]) CloseIndex(interval time.Duration) error {
+func (gq *GroupQueue[T]) CloseIndex() error {
 	var err error
-	for {
-		gq.mu.RLock()
-		nameQueueLenMap := gq.lengthWithNotEmpty()
-		if len(nameQueueLenMap) == 0 {
-			break
-		}
-		time.Sleep(interval)
-	}
+	gq.mu.Lock()
+	defer gq.mu.Unlock()
 	for name, q := range gq.queues {
 		closeErr := q.indexFile.Close()
 		if closeErr != nil {
