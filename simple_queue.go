@@ -9,11 +9,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
 var (
-	indexFilename = "index"
+	indexFilename             = "index"
+	enqueuePaddedDataPool     sync.Pool
+	bulkEnqueuePaddedDataPool sync.Pool
 )
 
 // Queue represents a file-based FIFO queue with generic type T.
@@ -144,6 +147,24 @@ func NewQueue[T any](name string, opts ...Option) (*Queue[T], error) {
 	startPosition := uint64((headIndex / enqueueWriteSize)) * dataFixedLength
 	initializeBlock := make(chan struct{})
 
+	enqueuePaddedDataPool = sync.Pool{
+		New: func() any {
+			p := make([]byte, dataFixedLength)
+			return &p
+		},
+	}
+	enqueuePaddedData := enqueuePaddedDataPool.Get().(*[]byte)
+	enqueuePaddedDataPool.Put(enqueuePaddedData)
+
+	bulkEnqueuePaddedDataPool = sync.Pool{
+		New: func() any {
+			p := make([]byte, dataFixedLength*uint64(queueSize/3)/uint64(enqueueWriteSize))
+			return &p
+		},
+	}
+	bulkEnqueuePaddedData := bulkEnqueuePaddedDataPool.Get().(*[]byte)
+	bulkEnqueuePaddedDataPool.Put(bulkEnqueuePaddedData)
+
 	q := Queue[T]{
 		name:             name,
 		fileDir:          fileDir,
@@ -192,8 +213,12 @@ func (q *Queue[T]) Enqueue(data *T) error {
 	if err != nil {
 		return err
 	}
-	paddedData := make([]byte, q.dataFixedLength)
-	copy(paddedData, jsonData)
+	paddedData := enqueuePaddedDataPool.Get().(*[]byte)
+	defer func() {
+		clear(*paddedData)
+		enqueuePaddedDataPool.Put(paddedData)
+	}()
+	copy(*paddedData, jsonData)
 
 	// write queue channel
 	q.queue <- &Message[T]{name: q.name, index: q.headIndex, data: data}
@@ -202,7 +227,7 @@ func (q *Queue[T]) Enqueue(data *T) error {
 		q.headIndex = 0
 	}
 
-	err = q.writeFile(paddedData)
+	err = q.writeFile(*paddedData)
 	if err != nil {
 		return err
 	}
@@ -226,9 +251,22 @@ func (q *Queue[T]) Enqueue(data *T) error {
 //	}
 func (q *Queue[T]) BulkEnqueue(data []*T) error {
 	var err error
+
+	paddedData := bulkEnqueuePaddedDataPool.Get().(*[]byte)
+	defer func() {
+		clear(*paddedData)
+		*paddedData = (*paddedData)[:cap(*paddedData)]
+		enqueuePaddedDataPool.Put(paddedData)
+	}()
+
 	// if data length is 123, enqueueWriteSize is 10 and dataFixedLength is 4kb
 	// paddedData is 12 * 4kb + 4kb
-	paddedData := make([]byte, uint64(len(data)/q.enqueueWriteSize)*q.dataFixedLength+q.dataFixedLength)
+	writeDataLen := uint64(len(data)/q.enqueueWriteSize)*q.dataFixedLength + q.dataFixedLength
+	paddedDataLen := uint64(len(*paddedData))
+	if writeDataLen > paddedDataLen {
+		*paddedData = append(*paddedData, make([]byte, writeDataLen-paddedDataLen)...)
+	}
+	*paddedData = (*paddedData)[:writeDataLen]
 	l := len(data)
 	for i := 0; i < l; i += q.enqueueWriteSize {
 		var jsonData []byte
@@ -243,7 +281,7 @@ func (q *Queue[T]) BulkEnqueue(data []*T) error {
 		if err != nil {
 			return err
 		}
-		copy(paddedData[uint64(i/q.enqueueWriteSize)*q.dataFixedLength:], jsonData)
+		copy((*paddedData)[uint64(i/q.enqueueWriteSize)*q.dataFixedLength:], jsonData)
 		for j := i; j < i+q.enqueueWriteSize; j++ {
 			if j < l {
 				q.queue <- &Message[T]{name: q.name, index: q.headIndex, data: data[j]}
@@ -257,7 +295,7 @@ func (q *Queue[T]) BulkEnqueue(data []*T) error {
 			q.headIndex = 0
 		}
 	}
-	err = q.writeFile(paddedData)
+	err = q.writeFile(*paddedData)
 	if err != nil {
 		return err
 	}

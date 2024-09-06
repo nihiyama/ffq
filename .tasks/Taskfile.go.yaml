@@ -18,3 +18,11 @@ tasks:
     cmds:
       - go test -benchmem -run=^$ -bench ^Benchmark github.com/nihiyama/ffq
     silent: true
+
+  bench-cpu:
+    desc: run go benchmark
+    dir: "{{.ROOT_DIR}}"
+    cmds:
+      - go test -benchmem -cpuprofile profile.out -run=^$ -bench ^Benchmark github.com/nihiyama/ffq
+      - go tool pprof -http=:8080 profile.out
+    silent: true
