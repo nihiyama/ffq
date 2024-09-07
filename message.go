@@ -8,9 +8,10 @@ package ffq
 //   - index: The index of the message in the queue.
 //   - data: A pointer to the data associated with the message.
 type Message[T any] struct {
-	index int
-	name  string
-	data  *T
+	globalIndex uint32
+	localIndex  uint32
+	name        string
+	data        *T
 }
 
 func (m *Message[T]) Name() string {
@@ -27,7 +28,7 @@ func (m *Message[T]) Name() string {
 //	message := Message[string]{index: 1, data: &"exampleData"}
 //	fmt.Println("Message index:", message.Index())
 func (m *Message[T]) Index() int {
-	return m.index
+	return int(m.globalIndex)
 }
 
 // Data returns the data associated with the message.
