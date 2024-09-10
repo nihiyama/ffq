@@ -120,6 +120,7 @@ func TestReadIndex(t *testing.T) {
 	tests := []struct {
 		name                   string
 		input                  string
+		expectedSeekEnd        uint64
 		expectedGlobalIndexVal int
 		expectedLocalIndexVal  int
 		expectedErr            string
@@ -127,6 +128,7 @@ func TestReadIndex(t *testing.T) {
 		{
 			name:                   "file does not exist",
 			input:                  "testdata/utils/read_index/ffq/index_new",
+			expectedSeekEnd:        0,
 			expectedGlobalIndexVal: 0,
 			expectedLocalIndexVal:  0,
 			expectedErr:            "",
@@ -134,6 +136,7 @@ func TestReadIndex(t *testing.T) {
 		{
 			name:                   "file cannnot open invalid permission",
 			input:                  "testdata/utils/read_index/ffq/index_invalid_permission",
+			expectedSeekEnd:        0,
 			expectedGlobalIndexVal: 0,
 			expectedLocalIndexVal:  0,
 			expectedErr:            "permission denied",
@@ -141,6 +144,7 @@ func TestReadIndex(t *testing.T) {
 		{
 			name:                   "read from file",
 			input:                  "testdata/utils/read_index/ffq/index",
+			expectedSeekEnd:        0,
 			expectedGlobalIndexVal: 12345,
 			expectedLocalIndexVal:  54321,
 			expectedErr:            "",
@@ -148,6 +152,7 @@ func TestReadIndex(t *testing.T) {
 		{
 			name:                   "read from invalid short data",
 			input:                  "testdata/utils/read_index/ffq/index_invalid_eof",
+			expectedSeekEnd:        0,
 			expectedGlobalIndexVal: 0,
 			expectedLocalIndexVal:  0,
 			expectedErr:            "EOF",
@@ -155,6 +160,7 @@ func TestReadIndex(t *testing.T) {
 		{
 			name:                   "read from invalid string data",
 			input:                  "testdata/utils/read_index/ffq/index_invalid_string",
+			expectedSeekEnd:        0,
 			expectedGlobalIndexVal: 0,
 			expectedLocalIndexVal:  0,
 			expectedErr:            "unexpected EOF",
@@ -163,7 +169,10 @@ func TestReadIndex(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			actualGlobalIndexVal, actualLocalIndexVal, actualErr := readIndex(tt.input)
+			actualSeekEnd, actualGlobalIndexVal, actualLocalIndexVal, actualErr := readIndex(tt.input)
+			if actualSeekEnd != tt.expectedSeekEnd {
+				t.Fatalf("Failed test: %s, expectedSeekEnd: %v, actualSeekEnd: %v", tt.name, tt.expectedGlobalIndexVal, actualGlobalIndexVal)
+			}
 			if actualGlobalIndexVal != tt.expectedGlobalIndexVal {
 				t.Fatalf("Failed test: %s, expectedGlobalIndexVal: %v, actualGlobalIndexVal: %v", tt.name, tt.expectedGlobalIndexVal, actualGlobalIndexVal)
 			}

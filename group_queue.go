@@ -29,21 +29,17 @@ import (
 //   - enqueueSig: A channel used for signaling between operations.
 //   - mu: A mutex for synchronizing access to the queues.
 type GroupQueue[T any] struct {
-	dataFixedLength  uint64
-	maxFileSize      uint64
-	queueSize        int
-	enqueueWriteSize int
-	pageSize         int
-	maxIndexSize     int
-	name             string
-	fileDir          string
-	queues           map[string]*Queue[T]
-	jsonEncoder      func(v any) ([]byte, error)
-	jsonDecoder      func(data []byte, v any) error
-	initializeBlock  chan struct{}
-	enqueueSig       chan struct{}
-	closeSig         chan struct{}
-	mu               *sync.RWMutex
+	queueSize       int
+	pageSize        int
+	name            string
+	fileDir         string
+	queues          map[string]*Queue[T]
+	encoder         func(v any) ([]byte, error)
+	decoder         func(data []byte, v any) error
+	initializeBlock chan struct{}
+	enqueueSig      chan struct{}
+	closeSig        chan struct{}
+	mu              *sync.RWMutex
 }
 
 type bulkQueueChData[T any] struct {
@@ -52,6 +48,7 @@ type bulkQueueChData[T any] struct {
 }
 
 type bulkIndicies struct {
+	seekEnd     uint64
 	globalIndex uint32
 	localIndex  uint32
 }
@@ -98,33 +95,21 @@ func NewGroupQueue[T any](name string, opts ...Option) (*GroupQueue[T], error) {
 		queueSize = *options.queueSize
 	}
 
-	enqueueWriteSize := 10
-	if options.enqueueWriteSize != nil {
-		enqueueWriteSize = *options.enqueueWriteSize
-	}
-
 	pageSize := 2
 	if options.pageSize != nil {
 		pageSize = *options.pageSize
 	}
 
-	var dataFixedLength uint64 = 8
-	if options.dataFixedLength != nil {
-		dataFixedLength = *options.dataFixedLength
+	var encoder func(v any) ([]byte, error) = json.Marshal
+	if options.encoder != nil {
+		encoder = *options.encoder
 	}
 
-	var jsonEncoder func(v any) ([]byte, error) = json.Marshal
-	if options.jsonEncoder != nil {
-		jsonEncoder = *options.jsonEncoder
+	var decoder func(data []byte, v any) error = json.Unmarshal
+	if options.decoder != nil {
+		decoder = *options.decoder
 	}
 
-	var jsonDecoder func(data []byte, v any) error = json.Unmarshal
-	if options.jsonDecoder != nil {
-		jsonDecoder = *options.jsonDecoder
-	}
-
-	maxFileSize := uint64(queueSize) * dataFixedLength
-	maxIndexSize := queueSize * pageSize
 	initializeBlock := make(chan struct{})
 	queues := make(map[string]*Queue[T], 10)
 	var mu sync.RWMutex
@@ -132,21 +117,17 @@ func NewGroupQueue[T any](name string, opts ...Option) (*GroupQueue[T], error) {
 	closeSig := make(chan struct{}, 1)
 
 	gq := GroupQueue[T]{
-		name:             name,
-		fileDir:          fileDir,
-		queueSize:        queueSize,
-		enqueueWriteSize: enqueueWriteSize,
-		pageSize:         pageSize,
-		dataFixedLength:  dataFixedLength,
-		maxFileSize:      maxFileSize,
-		maxIndexSize:     maxIndexSize,
-		jsonEncoder:      jsonEncoder,
-		jsonDecoder:      jsonDecoder,
-		initializeBlock:  initializeBlock,
-		queues:           queues,
-		mu:               &mu,
-		enqueueSig:       enqueueSig,
-		closeSig:         closeSig,
+		name:            name,
+		fileDir:         fileDir,
+		queueSize:       queueSize,
+		pageSize:        pageSize,
+		encoder:         encoder,
+		decoder:         decoder,
+		initializeBlock: initializeBlock,
+		queues:          queues,
+		mu:              &mu,
+		enqueueSig:      enqueueSig,
+		closeSig:        closeSig,
 	}
 
 	go func() {
@@ -176,10 +157,8 @@ func (gq *GroupQueue[T]) addQueue(name string) error {
 		WithFileDir(filepath.Join(gq.fileDir, name)),
 		WithPageSize(gq.pageSize),
 		WithQueueSize(gq.queueSize),
-		WithEnqueueWriteSize(gq.enqueueWriteSize),
-		WithDataFixedLength(gq.dataFixedLength),
-		WithJSONEncoder(gq.jsonEncoder),
-		WithJSONDecoder(gq.jsonDecoder),
+		WithEncoder(gq.encoder),
+		WithDecoder(gq.decoder),
 	)
 	if err != nil {
 		return err
@@ -470,7 +449,7 @@ func (gq *GroupQueue[T]) FuncAfterDequeue(f func(*T) error) error {
 				if fErr != nil {
 					err = errors.Join(err, fErr)
 				}
-				iErr := q.writeIndex(message.globalIndex, message.localIndex)
+				iErr := q.writeIndex(message.seekEnd, message.globalIndex, message.localIndex)
 				if iErr != nil {
 					err = errors.Join(err, iErr)
 				}
@@ -514,6 +493,7 @@ func (gq *GroupQueue[T]) FuncAfterBulkDequeue(size int, lazy time.Duration, f fu
 		dataMu.Lock()
 		defer dataMu.Unlock()
 		indices[m.name] = bulkIndicies{
+			seekEnd:     m.seekEnd,
 			globalIndex: m.globalIndex,
 			localIndex:  m.localIndex,
 		}
@@ -596,7 +576,7 @@ func (gq *GroupQueue[T]) FuncAfterBulkDequeue(size int, lazy time.Duration, f fu
 			if gqErr != nil {
 				err = errors.Join(err, gqErr)
 			}
-			wiErr := q.writeIndex(bulkIndex.globalIndex, bulkIndex.localIndex)
+			wiErr := q.writeIndex(bulkIndex.seekEnd, bulkIndex.globalIndex, bulkIndex.localIndex)
 			if wiErr != nil {
 				err = errors.Join(err, wiErr)
 			}
@@ -745,7 +725,7 @@ func (gq *GroupQueue[T]) UpdateIndex(message *Message[T]) error {
 	if gqErr != nil {
 		err = errors.Join(err, gqErr)
 	}
-	iErr := q.writeIndex(message.globalIndex, message.localIndex)
+	iErr := q.writeIndex(message.seekEnd, message.globalIndex, message.localIndex)
 	if iErr != nil {
 		err = errors.Join(err, iErr)
 	}

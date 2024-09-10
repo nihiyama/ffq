@@ -8,6 +8,7 @@ package ffq
 //   - index: The index of the message in the queue.
 //   - data: A pointer to the data associated with the message.
 type Message[T any] struct {
+	seekEnd     uint64
 	globalIndex uint32
 	localIndex  uint32
 	name        string

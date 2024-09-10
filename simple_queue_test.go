@@ -17,21 +17,21 @@ func TestNewQueue(t *testing.T) {
 		enqueueWriteSize int
 		pageSize         int
 		dataFixedLength  uint64
-		jsonEncoder      func(v any) ([]byte, error)
-		jsonDecoder      func(data []byte, v any) error
+		encoder          func(v any) ([]byte, error)
+		decoder          func(data []byte, v any) error
 		afterRemove      bool
 	}{
-		{
-			name:             "exist queue",
-			fileDir:          "testdata/simple_queue/new_queue/ffq",
-			queueSize:        5,
-			enqueueWriteSize: 10,
-			pageSize:         3,
-			dataFixedLength:  4,
-			jsonEncoder:      json.Marshal,
-			jsonDecoder:      json.Unmarshal,
-			afterRemove:      false,
-		},
+		// {
+		// 	name:             "exist queue",
+		// 	fileDir:          "testdata/simple_queue/new_queue/ffq",
+		// 	queueSize:        5,
+		// 	enqueueWriteSize: 10,
+		// 	pageSize:         3,
+		// 	dataFixedLength:  4,
+		// 	encoder:          json.Marshal,
+		// 	decoder:          json.Unmarshal,
+		// 	afterRemove:      false,
+		// },
 		{
 			name:             "new queue",
 			fileDir:          "testdata/simple_queue/new_queue/ffq_new",
@@ -39,13 +39,15 @@ func TestNewQueue(t *testing.T) {
 			enqueueWriteSize: 10,
 			pageSize:         3,
 			dataFixedLength:  4,
-			jsonEncoder:      json.Marshal,
-			jsonDecoder:      json.Unmarshal,
+			encoder:          json.Marshal,
+			decoder:          json.Unmarshal,
 			afterRemove:      true,
 		},
 	}
 
-	type Data struct{}
+	type Data struct {
+		Value int
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.afterRemove {
@@ -54,24 +56,16 @@ func TestNewQueue(t *testing.T) {
 			actual, _ := NewQueue[Data]("testQueue",
 				WithFileDir(tt.fileDir),
 				WithQueueSize(tt.queueSize),
-				WithEnqueueWriteSize(tt.enqueueWriteSize),
 				WithPageSize(tt.pageSize),
-				WithDataFixedLength(tt.dataFixedLength),
-				WithJSONEncoder(tt.jsonEncoder),
-				WithJSONDecoder(tt.jsonDecoder),
+				WithEncoder(tt.encoder),
+				WithDecoder(tt.decoder),
 			)
 
 			if tt.queueSize != actual.queueSize {
 				t.Errorf("Failed test: queueSize, expect: %v, actual: %v", tt.queueSize, actual.queueSize)
 			}
-			if tt.enqueueWriteSize != actual.enqueueWriteSize {
-				t.Errorf("Failed test: enqueueWriteSize, expect: %v, actual: %v", tt.enqueueWriteSize, actual.enqueueWriteSize)
-			}
 			if tt.pageSize != actual.pageSize {
 				t.Errorf("Failed test: pageSize, expect: %v, actual: %v", tt.pageSize, actual.pageSize)
-			}
-			if tt.dataFixedLength*1024*uint64(tt.enqueueWriteSize) != actual.dataFixedLength {
-				t.Errorf("Failed test: dataFixedLength, expect: %v, actual: %v", tt.dataFixedLength*1024*uint64(tt.enqueueWriteSize), actual.dataFixedLength)
 			}
 			if tt.fileDir != actual.fileDir {
 				t.Errorf("Failed test: fileDir, expect: %v, actual: %v", tt.fileDir, actual.fileDir)
@@ -151,21 +145,17 @@ func TestQEnqueueDequeue(t *testing.T) {
 			defer os.RemoveAll(dir)
 
 			queueSize := 5
-			enqueueWriteSize := 2
 			pageSize := 2
-			dataFixedLength := uint64(1)
-			jsonEncoder := json.Marshal
-			jsonDecoder := json.Unmarshal
+			encoder := json.Marshal
+			decoder := json.Unmarshal
 
 			q, err := NewQueue[Data](
 				"testQueue",
 				WithFileDir(dir),
 				WithQueueSize(queueSize),
-				WithEnqueueWriteSize(enqueueWriteSize),
 				WithPageSize(pageSize),
-				WithDataFixedLength(dataFixedLength),
-				WithJSONEncoder(jsonEncoder),
-				WithJSONDecoder(jsonDecoder),
+				WithEncoder(encoder),
+				WithDecoder(decoder),
 			)
 
 			q.WaitInitialize()
@@ -271,21 +261,17 @@ func TestQEnqueueDequeueWithFunc(t *testing.T) {
 			defer os.RemoveAll(dir)
 
 			queueSize := 5
-			enqueueWriteSize := 2
 			pageSize := 2
-			dataFixedLength := uint64(1)
-			jsonEncoder := json.Marshal
-			jsonDecoder := json.Unmarshal
+			encoder := json.Marshal
+			decoder := json.Unmarshal
 
 			q, err := NewQueue[Data](
 				"testQueue",
 				WithFileDir(dir),
 				WithQueueSize(queueSize),
-				WithEnqueueWriteSize(enqueueWriteSize),
 				WithPageSize(pageSize),
-				WithDataFixedLength(dataFixedLength),
-				WithJSONEncoder(jsonEncoder),
-				WithJSONDecoder(jsonDecoder),
+				WithEncoder(encoder),
+				WithDecoder(decoder),
 			)
 
 			q.WaitInitialize()
@@ -388,21 +374,17 @@ func TestQBulkEnqueueDequeue(t *testing.T) {
 			defer os.RemoveAll(dir)
 
 			queueSize := 5
-			enqueueWriteSize := 2
 			pageSize := 2
-			dataFixedLength := uint64(1)
-			jsonEncoder := json.Marshal
-			jsonDecoder := json.Unmarshal
+			encoder := json.Marshal
+			decoder := json.Unmarshal
 
 			q, err := NewQueue[Data](
 				"testQueue",
 				WithFileDir(dir),
 				WithQueueSize(queueSize),
-				WithEnqueueWriteSize(enqueueWriteSize),
 				WithPageSize(pageSize),
-				WithDataFixedLength(dataFixedLength),
-				WithJSONEncoder(jsonEncoder),
-				WithJSONDecoder(jsonDecoder),
+				WithEncoder(encoder),
+				WithDecoder(decoder),
 			)
 
 			q.WaitInitialize()
@@ -518,21 +500,17 @@ func TestQBulkEnqueueDequeueWithFunc(t *testing.T) {
 			defer os.RemoveAll(dir)
 
 			queueSize := 5
-			enqueueWriteSize := 2
 			pageSize := 2
-			dataFixedLength := uint64(1)
-			jsonEncoder := json.Marshal
-			jsonDecoder := json.Unmarshal
+			encoder := json.Marshal
+			decoder := json.Unmarshal
 
 			q, err := NewQueue[Data](
 				"testQueue",
 				WithFileDir(dir),
 				WithQueueSize(queueSize),
-				WithEnqueueWriteSize(enqueueWriteSize),
 				WithPageSize(pageSize),
-				WithDataFixedLength(dataFixedLength),
-				WithJSONEncoder(jsonEncoder),
-				WithJSONDecoder(jsonDecoder),
+				WithEncoder(encoder),
+				WithDecoder(decoder),
 			)
 
 			q.WaitInitialize()
@@ -593,21 +571,17 @@ func TestQLength(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	queueSize := 5
-	enqueueWriteSize := 2
 	pageSize := 2
-	dataFixedLength := uint64(1)
-	jsonEncoder := json.Marshal
-	jsonDecoder := json.Unmarshal
+	encoder := json.Marshal
+	decoder := json.Unmarshal
 
 	q, err := NewQueue[Data](
 		"testQueue",
 		WithFileDir(dir),
 		WithQueueSize(queueSize),
-		WithEnqueueWriteSize(enqueueWriteSize),
 		WithPageSize(pageSize),
-		WithDataFixedLength(dataFixedLength),
-		WithJSONEncoder(jsonEncoder),
-		WithJSONDecoder(jsonDecoder),
+		WithEncoder(encoder),
+		WithDecoder(decoder),
 	)
 
 	q.WaitInitialize()

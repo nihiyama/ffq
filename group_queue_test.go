@@ -16,8 +16,8 @@ func TestNewGroupQueue(t *testing.T) {
 		enqueueWriteSize int
 		pageSize         int
 		dataFixedLength  uint64
-		jsonEncoder      func(v any) ([]byte, error)
-		jsonDecoder      func(data []byte, v any) error
+		encoder          func(v any) ([]byte, error)
+		decoder          func(data []byte, v any) error
 		afterRemove      bool
 	}{
 		{
@@ -27,8 +27,8 @@ func TestNewGroupQueue(t *testing.T) {
 			enqueueWriteSize: 10,
 			pageSize:         3,
 			dataFixedLength:  4,
-			jsonEncoder:      json.Marshal,
-			jsonDecoder:      json.Unmarshal,
+			encoder:          json.Marshal,
+			decoder:          json.Unmarshal,
 			afterRemove:      false,
 		},
 		{
@@ -38,8 +38,8 @@ func TestNewGroupQueue(t *testing.T) {
 			enqueueWriteSize: 10,
 			pageSize:         3,
 			dataFixedLength:  4,
-			jsonEncoder:      json.Marshal,
-			jsonDecoder:      json.Unmarshal,
+			encoder:          json.Marshal,
+			decoder:          json.Unmarshal,
 			afterRemove:      true,
 		},
 	}
@@ -53,24 +53,16 @@ func TestNewGroupQueue(t *testing.T) {
 			actual, _ := NewGroupQueue[Data]("testQueue",
 				WithFileDir(tt.fileDir),
 				WithQueueSize(tt.queueSize),
-				WithEnqueueWriteSize(tt.enqueueWriteSize),
 				WithPageSize(tt.pageSize),
-				WithDataFixedLength(tt.dataFixedLength),
-				WithJSONEncoder(tt.jsonEncoder),
-				WithJSONDecoder(tt.jsonDecoder),
+				WithEncoder(tt.encoder),
+				WithDecoder(tt.decoder),
 			)
 
 			if tt.queueSize != actual.queueSize {
 				t.Errorf("Failed test: queueSize, expect: %v, actual: %v", tt.queueSize, actual.queueSize)
 			}
-			if tt.enqueueWriteSize != actual.enqueueWriteSize {
-				t.Errorf("Failed test: enqueueWriteSize, expect: %v, actual: %v", tt.enqueueWriteSize, actual.enqueueWriteSize)
-			}
 			if tt.pageSize != actual.pageSize {
 				t.Errorf("Failed test: pageSize, expect: %v, actual: %v", tt.pageSize, actual.pageSize)
-			}
-			if tt.dataFixedLength != actual.dataFixedLength {
-				t.Errorf("Failed test: dataFixedLength, expect: %v, actual: %v", tt.dataFixedLength*1024*uint64(tt.enqueueWriteSize), actual.dataFixedLength)
 			}
 			if tt.fileDir != actual.fileDir {
 				t.Errorf("Failed test: fileDir, expect: %v, actual: %v", tt.fileDir, actual.fileDir)
@@ -143,21 +135,17 @@ func TestGQEnqueueDequeue(t *testing.T) {
 			defer os.RemoveAll(dir)
 
 			queueSize := 5
-			enqueueWriteSize := 2
 			pageSize := 2
-			dataFixedLength := uint64(1)
-			jsonEncoder := json.Marshal
-			jsonDecoder := json.Unmarshal
+			encoder := json.Marshal
+			decoder := json.Unmarshal
 
 			gq, err := NewGroupQueue[Data](
 				"testQueue",
 				WithFileDir(dir),
 				WithQueueSize(queueSize),
-				WithEnqueueWriteSize(enqueueWriteSize),
 				WithPageSize(pageSize),
-				WithDataFixedLength(dataFixedLength),
-				WithJSONEncoder(jsonEncoder),
-				WithJSONDecoder(jsonDecoder),
+				WithEncoder(encoder),
+				WithDecoder(decoder),
 			)
 
 			gq.WaitInitialize()
@@ -279,21 +267,17 @@ func TestGQEnqueueDequeueWithFunc(t *testing.T) {
 			defer os.RemoveAll(dir)
 
 			queueSize := 5
-			enqueueWriteSize := 2
 			pageSize := 2
-			dataFixedLength := uint64(1)
-			jsonEncoder := json.Marshal
-			jsonDecoder := json.Unmarshal
+			encoder := json.Marshal
+			decoder := json.Unmarshal
 
 			gq, err := NewGroupQueue[Data](
 				"testQueue",
 				WithFileDir(dir),
 				WithQueueSize(queueSize),
-				WithEnqueueWriteSize(enqueueWriteSize),
 				WithPageSize(pageSize),
-				WithDataFixedLength(dataFixedLength),
-				WithJSONEncoder(jsonEncoder),
-				WithJSONDecoder(jsonDecoder),
+				WithEncoder(encoder),
+				WithDecoder(decoder),
 			)
 
 			gq.WaitInitialize()
@@ -417,21 +401,17 @@ func TestGQBulkEnqueueDequeue(t *testing.T) {
 			defer os.RemoveAll(dir)
 
 			queueSize := 5
-			enqueueWriteSize := 2
 			pageSize := 2
-			dataFixedLength := uint64(1)
-			jsonEncoder := json.Marshal
-			jsonDecoder := json.Unmarshal
+			encoder := json.Marshal
+			decoder := json.Unmarshal
 
 			gq, err := NewGroupQueue[Data](
 				"testQueue",
 				WithFileDir(dir),
 				WithQueueSize(queueSize),
-				WithEnqueueWriteSize(enqueueWriteSize),
 				WithPageSize(pageSize),
-				WithDataFixedLength(dataFixedLength),
-				WithJSONEncoder(jsonEncoder),
-				WithJSONDecoder(jsonDecoder),
+				WithEncoder(encoder),
+				WithDecoder(decoder),
 			)
 
 			gq.WaitInitialize()
@@ -554,21 +534,17 @@ func TestGQBulkEnqueueDequeueWithFunc(t *testing.T) {
 			defer os.RemoveAll(dir)
 
 			queueSize := 5
-			enqueueWriteSize := 2
 			pageSize := 2
-			dataFixedLength := uint64(1)
-			jsonEncoder := json.Marshal
-			jsonDecoder := json.Unmarshal
+			encoder := json.Marshal
+			decoder := json.Unmarshal
 
 			gq, err := NewGroupQueue[Data](
 				"testQueue",
 				WithFileDir(dir),
 				WithQueueSize(queueSize),
-				WithEnqueueWriteSize(enqueueWriteSize),
 				WithPageSize(pageSize),
-				WithDataFixedLength(dataFixedLength),
-				WithJSONEncoder(jsonEncoder),
-				WithJSONDecoder(jsonDecoder),
+				WithEncoder(encoder),
+				WithDecoder(decoder),
 			)
 
 			gq.WaitInitialize()
@@ -644,21 +620,17 @@ func TestGQLength(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	queueSize := 5
-	enqueueWriteSize := 2
 	pageSize := 2
-	dataFixedLength := uint64(1)
-	jsonEncoder := json.Marshal
-	jsonDecoder := json.Unmarshal
+	encoder := json.Marshal
+	decoder := json.Unmarshal
 
 	gq, err := NewGroupQueue[Data](
 		"testQueue",
 		WithFileDir(dir),
 		WithQueueSize(queueSize),
-		WithEnqueueWriteSize(enqueueWriteSize),
 		WithPageSize(pageSize),
-		WithDataFixedLength(dataFixedLength),
-		WithJSONEncoder(jsonEncoder),
-		WithJSONDecoder(jsonDecoder),
+		WithEncoder(encoder),
+		WithDecoder(decoder),
 	)
 
 	gq.WaitInitialize()

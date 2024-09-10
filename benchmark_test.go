@@ -88,9 +88,7 @@ func BenchmarkSimpleQueueEnqueueDequeue(b *testing.B) {
 					"benchmark",
 					ffq.WithFileDir(dir),
 					ffq.WithQueueSize(1000),
-					ffq.WithEnqueueWriteSize(15),
 					ffq.WithPageSize(3),
-					ffq.WithDataFixedLength(4),
 				)
 				q.WaitInitialize()
 				var wg sync.WaitGroup
@@ -139,9 +137,7 @@ func BenchmarkSimpleQueueBulkEnqueueDequeue(b *testing.B) {
 					"benchmark",
 					ffq.WithFileDir(dir),
 					ffq.WithQueueSize(1000),
-					ffq.WithEnqueueWriteSize(15),
 					ffq.WithPageSize(3),
-					ffq.WithDataFixedLength(4),
 				)
 				q.WaitInitialize()
 				var wg sync.WaitGroup
@@ -190,9 +186,7 @@ func BenchmarkGroupQueueEnqueueDequeue_3Group(b *testing.B) {
 					"benchmark",
 					ffq.WithFileDir(dir),
 					ffq.WithQueueSize(1000),
-					ffq.WithEnqueueWriteSize(15),
 					ffq.WithPageSize(3),
-					ffq.WithDataFixedLength(4),
 				)
 				gq.WaitInitialize()
 				var wg sync.WaitGroup
@@ -256,9 +250,7 @@ func BenchmarkGroupQueueBulkEnqueueDequeue_3Group(b *testing.B) {
 					"benchmark",
 					ffq.WithFileDir(dir),
 					ffq.WithQueueSize(1000),
-					ffq.WithEnqueueWriteSize(15),
 					ffq.WithPageSize(3),
-					ffq.WithDataFixedLength(4),
 				)
 				gq.WaitInitialize()
 				var wg sync.WaitGroup
