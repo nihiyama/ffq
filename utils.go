@@ -28,34 +28,34 @@ func openIndexFile(indexFilepath string) (*os.File, error) {
 	return indexFile, err
 }
 
-func readIndex(indexFilepath string) (uint64, int, int, error) {
+func readIndex(indexFilepath string) (int, int, int, error) {
 	var err error
 	if _, err := os.Stat(indexFilepath); os.IsNotExist(err) {
-		return 0, 0, 0, nil
+		return 0, -1, -1, nil
 	}
 	indexFile, err := os.Open(indexFilepath)
 	if err != nil {
-		return 0, 0, 0, err
+		return 0, -1, -1, err
 	}
 	defer indexFile.Close()
 
-	// uint64 size is 8, uint32 size is 4
-	// | -- seekEnd(8) -- | -- globalIndex(4) -- | -- localIndex(4) -- |
-	var seekEnd uint64
+	// uint32 size is 4
+	// | -- page(4) -- | -- globalIndex(4) -- | -- localIndex(4) -- |
+	var page uint32
 	var globalIndex uint32
 	var localIndex uint32
-	err = binary.Read(indexFile, binary.LittleEndian, &seekEnd)
+	err = binary.Read(indexFile, binary.LittleEndian, &page)
 	if err != nil {
-		return 0, 0, 0, err
+		return 0, -1, -1, err
 	}
 	err = binary.Read(indexFile, binary.LittleEndian, &globalIndex)
 	if err != nil {
-		return seekEnd, 0, 0, err
+		return int(page), -1, -1, err
 	}
 	err = binary.Read(indexFile, binary.LittleEndian, &localIndex)
 	if err != nil {
-		return seekEnd, int(globalIndex), 0, err
+		return int(page), int(globalIndex), -1, err
 	}
 
-	return seekEnd, int(globalIndex), int(localIndex), nil
+	return int(page), int(globalIndex), int(localIndex), nil
 }

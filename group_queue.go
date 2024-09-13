@@ -48,9 +48,9 @@ type bulkQueueChData[T any] struct {
 }
 
 type bulkIndicies struct {
-	seekEnd     uint64
-	globalIndex uint32
-	localIndex  uint32
+	page        int
+	globalIndex int
+	localIndex  int
 }
 
 // NewGroupQueue creates a new GroupQueue with the specified name and options.
@@ -449,7 +449,7 @@ func (gq *GroupQueue[T]) FuncAfterDequeue(f func(*T) error) error {
 				if fErr != nil {
 					err = errors.Join(err, fErr)
 				}
-				iErr := q.writeIndex(message.seekEnd, message.globalIndex, message.localIndex)
+				iErr := q.writeIndex(message.page, message.globalIndex, message.localIndex)
 				if iErr != nil {
 					err = errors.Join(err, iErr)
 				}
@@ -493,7 +493,7 @@ func (gq *GroupQueue[T]) FuncAfterBulkDequeue(size int, lazy time.Duration, f fu
 		dataMu.Lock()
 		defer dataMu.Unlock()
 		indices[m.name] = bulkIndicies{
-			seekEnd:     m.seekEnd,
+			page:        m.page,
 			globalIndex: m.globalIndex,
 			localIndex:  m.localIndex,
 		}
@@ -576,7 +576,7 @@ func (gq *GroupQueue[T]) FuncAfterBulkDequeue(size int, lazy time.Duration, f fu
 			if gqErr != nil {
 				err = errors.Join(err, gqErr)
 			}
-			wiErr := q.writeIndex(bulkIndex.seekEnd, bulkIndex.globalIndex, bulkIndex.localIndex)
+			wiErr := q.writeIndex(bulkIndex.page, bulkIndex.globalIndex, bulkIndex.localIndex)
 			if wiErr != nil {
 				err = errors.Join(err, wiErr)
 			}
@@ -725,7 +725,7 @@ func (gq *GroupQueue[T]) UpdateIndex(message *Message[T]) error {
 	if gqErr != nil {
 		err = errors.Join(err, gqErr)
 	}
-	iErr := q.writeIndex(message.seekEnd, message.globalIndex, message.localIndex)
+	iErr := q.writeIndex(message.page, message.globalIndex, message.localIndex)
 	if iErr != nil {
 		err = errors.Join(err, iErr)
 	}
