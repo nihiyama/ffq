@@ -8,7 +8,7 @@ import (
 type options struct {
 	fileDir   *string
 	queueSize *int
-	pageSize  *int
+	maxPages  *int
 	encoder   *func(v any) ([]byte, error)
 	decoder   *func(data []byte, v any) error
 }
@@ -60,25 +60,25 @@ func WithQueueSize(size int) Option {
 	}
 }
 
-// WithPageSize sets the number of files used in a single rotation cycle.
+// WithMaxPages sets the number of files used in a single rotation cycle.
 //
 // Parameters:
 //   - size: The number of pages. Must be greater than 1.
 //
 // Returns:
-//   - Option: An Option function that sets the pageSize in the options struct.
+//   - Option: An Option function that sets the maxPages in the options struct.
 //   - error: Returns an error if the size is less than 2.
 //
 // Example:
 //
-//	queue, err := NewQueue("myQueue", WithPageSize(2))
-func WithPageSize(size int) Option {
+//	queue, err := NewQueue("myQueue", WithMaxPages(2))
+func WithMaxPages(size int) Option {
 	return func(options *options) error {
 		if size < 2 {
-			err := errors.New("pageSize must be set to greater than 1")
+			err := errors.New("maxPages must be set to greater than 1")
 			return errors.Join(ErrQueueOption, err)
 		}
-		options.pageSize = &size
+		options.maxPages = &size
 		return nil
 	}
 }

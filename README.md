@@ -51,5 +51,5 @@ ok      github.com/nihiyama/ffq 46.462s
 
 ## Note
 
-if change pageSize, pageSize, dataFixedLength
+if change maxPages, maxPages, dataFixedLength
 remove `fileDir/name` directory and start

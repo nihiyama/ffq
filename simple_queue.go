@@ -41,7 +41,7 @@ var (
 //   - fileDir: The directory where the queue files are stored.
 //   - queueSize: The maximum number of items that can be held in the queue.
 //   - enqueueWriteSize: The number of items to write to disk in each batch.
-//   - pageSize: The number of files used in a single rotation cycle.
+//   - maxPages: The number of files used in a single rotation cycle.
 //   - dataFixedLength: The fixed size of the data block written to each file.
 //   - maxFileSize: The maximum size of a single queue file.
 //   - maxIndexSize: The maximum size of the index file.
@@ -55,7 +55,7 @@ var (
 //   - initializeBlock: A channel to block until initialization is complete.
 type Queue[T any] struct {
 	queueSize       int
-	pageSize        int
+	maxPages        int
 	currentPage     int
 	headGlobalIndex int
 	name            string
@@ -112,9 +112,9 @@ func NewQueue[T any](name string, opts ...Option) (*Queue[T], error) {
 		queueSize = *options.queueSize
 	}
 
-	pageSize := 2
-	if options.pageSize != nil {
-		pageSize = *options.pageSize
+	maxPages := 2
+	if options.maxPages != nil {
+		maxPages = *options.maxPages
 	}
 
 	var encoder func(v any) ([]byte, error) = json.Marshal
@@ -151,7 +151,7 @@ func NewQueue[T any](name string, opts ...Option) (*Queue[T], error) {
 		name:            name,
 		fileDir:         fileDir,
 		queueSize:       queueSize,
-		pageSize:        pageSize,
+		maxPages:        maxPages,
 		currentPage:     currentPage,
 		queue:           queue,
 		headGlobalIndex: headGlobalIndex,
@@ -457,7 +457,7 @@ func (q *Queue[T]) rotateFile() error {
 	q.queueFile.Close()
 	q.headGlobalIndex = 0
 	q.currentPage++
-	if q.currentPage == q.pageSize {
+	if q.currentPage == q.maxPages {
 		q.currentPage = 0
 	}
 	newQueueFilepath := filepath.Join(q.fileDir, fmt.Sprintf("%s.%d", queueFilename, q.currentPage))
@@ -585,7 +585,7 @@ func (q *Queue[T]) initialize(localIndex int) {
 		nextPage := q.currentPage
 		if q.headGlobalIndex == q.queueSize {
 			nextPage := q.currentPage + 1
-			if nextPage == q.pageSize {
+			if nextPage == q.maxPages {
 				nextPage = 0
 			}
 		}

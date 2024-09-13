@@ -71,7 +71,7 @@ func TestWithQueueSize(t *testing.T) {
 	}
 }
 
-func TestWithPageSize(t *testing.T) {
+func TestWithMaxPages(t *testing.T) {
 	tests := []struct {
 		name        string
 		input       int
@@ -87,7 +87,7 @@ func TestWithPageSize(t *testing.T) {
 		{
 			name:        "page size cannot set with less than 2",
 			input:       1,
-			expectRet:   "pageSize must be set to greater than 1",
+			expectRet:   "maxPages must be set to greater than 1",
 			expectedVal: 0, // nil
 		},
 	}
@@ -95,7 +95,7 @@ func TestWithPageSize(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var options options
-			f := WithPageSize(tt.input)
+			f := WithMaxPages(tt.input)
 			actualRet := f(&options)
 			if actualRet == nil {
 				if tt.expectRet != "" {
@@ -106,7 +106,7 @@ func TestWithPageSize(t *testing.T) {
 					t.Fatalf("Failed test: %s, expectRet: %v, actualRet: %v", tt.name, tt.expectRet, actualRet)
 				}
 			}
-			actualVal := options.pageSize
+			actualVal := options.maxPages
 			if actualVal == nil {
 				if tt.expectedVal != 0 {
 					t.Fatalf("Failed test: %s, expectedVal: %v, actualVal: %v", tt.name, tt.expectedVal, actualVal)

@@ -15,7 +15,7 @@ func TestNewQueue(t *testing.T) {
 		fileDir          string
 		queueSize        int
 		enqueueWriteSize int
-		pageSize         int
+		maxPages         int
 		dataFixedLength  uint64
 		encoder          func(v any) ([]byte, error)
 		decoder          func(data []byte, v any) error
@@ -26,7 +26,7 @@ func TestNewQueue(t *testing.T) {
 		// 	fileDir:          "testdata/simple_queue/new_queue/ffq",
 		// 	queueSize:        5,
 		// 	enqueueWriteSize: 10,
-		// 	pageSize:         3,
+		// 	maxPages:         3,
 		// 	dataFixedLength:  4,
 		// 	encoder:          json.Marshal,
 		// 	decoder:          json.Unmarshal,
@@ -37,7 +37,7 @@ func TestNewQueue(t *testing.T) {
 			fileDir:          "testdata/simple_queue/new_queue/ffq_new",
 			queueSize:        5,
 			enqueueWriteSize: 10,
-			pageSize:         3,
+			maxPages:         3,
 			dataFixedLength:  4,
 			encoder:          json.Marshal,
 			decoder:          json.Unmarshal,
@@ -56,7 +56,7 @@ func TestNewQueue(t *testing.T) {
 			actual, _ := NewQueue[Data]("testQueue",
 				WithFileDir(tt.fileDir),
 				WithQueueSize(tt.queueSize),
-				WithPageSize(tt.pageSize),
+				WithMaxPages(tt.maxPages),
 				WithEncoder(tt.encoder),
 				WithDecoder(tt.decoder),
 			)
@@ -64,8 +64,8 @@ func TestNewQueue(t *testing.T) {
 			if tt.queueSize != actual.queueSize {
 				t.Errorf("Failed test: queueSize, expect: %v, actual: %v", tt.queueSize, actual.queueSize)
 			}
-			if tt.pageSize != actual.pageSize {
-				t.Errorf("Failed test: pageSize, expect: %v, actual: %v", tt.pageSize, actual.pageSize)
+			if tt.maxPages != actual.maxPages {
+				t.Errorf("Failed test: maxPages, expect: %v, actual: %v", tt.maxPages, actual.maxPages)
 			}
 			if tt.fileDir != actual.fileDir {
 				t.Errorf("Failed test: fileDir, expect: %v, actual: %v", tt.fileDir, actual.fileDir)
@@ -145,7 +145,7 @@ func TestQEnqueueDequeue(t *testing.T) {
 			defer os.RemoveAll(dir)
 
 			queueSize := 5
-			pageSize := 2
+			maxPages := 2
 			encoder := json.Marshal
 			decoder := json.Unmarshal
 
@@ -153,7 +153,7 @@ func TestQEnqueueDequeue(t *testing.T) {
 				"testQueue",
 				WithFileDir(dir),
 				WithQueueSize(queueSize),
-				WithPageSize(pageSize),
+				WithMaxPages(maxPages),
 				WithEncoder(encoder),
 				WithDecoder(decoder),
 			)
@@ -261,7 +261,7 @@ func TestQEnqueueDequeueWithFunc(t *testing.T) {
 			defer os.RemoveAll(dir)
 
 			queueSize := 5
-			pageSize := 2
+			maxPages := 2
 			encoder := json.Marshal
 			decoder := json.Unmarshal
 
@@ -269,7 +269,7 @@ func TestQEnqueueDequeueWithFunc(t *testing.T) {
 				"testQueue",
 				WithFileDir(dir),
 				WithQueueSize(queueSize),
-				WithPageSize(pageSize),
+				WithMaxPages(maxPages),
 				WithEncoder(encoder),
 				WithDecoder(decoder),
 			)
@@ -374,7 +374,7 @@ func TestQBulkEnqueueDequeue(t *testing.T) {
 			defer os.RemoveAll(dir)
 
 			queueSize := 5
-			pageSize := 2
+			maxPages := 2
 			encoder := json.Marshal
 			decoder := json.Unmarshal
 
@@ -382,7 +382,7 @@ func TestQBulkEnqueueDequeue(t *testing.T) {
 				"testQueue",
 				WithFileDir(dir),
 				WithQueueSize(queueSize),
-				WithPageSize(pageSize),
+				WithMaxPages(maxPages),
 				WithEncoder(encoder),
 				WithDecoder(decoder),
 			)
@@ -500,7 +500,7 @@ func TestQBulkEnqueueDequeueWithFunc(t *testing.T) {
 			defer os.RemoveAll(dir)
 
 			queueSize := 5
-			pageSize := 2
+			maxPages := 2
 			encoder := json.Marshal
 			decoder := json.Unmarshal
 
@@ -508,7 +508,7 @@ func TestQBulkEnqueueDequeueWithFunc(t *testing.T) {
 				"testQueue",
 				WithFileDir(dir),
 				WithQueueSize(queueSize),
-				WithPageSize(pageSize),
+				WithMaxPages(maxPages),
 				WithEncoder(encoder),
 				WithDecoder(decoder),
 			)
@@ -571,7 +571,7 @@ func TestQLength(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	queueSize := 5
-	pageSize := 2
+	maxPages := 2
 	encoder := json.Marshal
 	decoder := json.Unmarshal
 
@@ -579,7 +579,7 @@ func TestQLength(t *testing.T) {
 		"testQueue",
 		WithFileDir(dir),
 		WithQueueSize(queueSize),
-		WithPageSize(pageSize),
+		WithMaxPages(maxPages),
 		WithEncoder(encoder),
 		WithDecoder(decoder),
 	)
