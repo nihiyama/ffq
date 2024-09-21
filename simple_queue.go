@@ -18,18 +18,6 @@ import (
 var (
 	indexFilename = "index"
 	queueFilename = "queue"
-	indexBufPool  = sync.Pool{
-		New: func() interface{} {
-			var b [12]byte
-			return &b
-		},
-	}
-	queueBufPool = sync.Pool{
-		New: func() interface{} {
-			// default 64kb Pool
-			return bytes.NewBuffer(make([]byte, 0, 64*1024))
-		},
-	}
 )
 
 // Queue represents a file-based FIFO queue with generic type T.
@@ -444,7 +432,8 @@ func (q *Queue[T]) writeQueue(b []byte) error {
 		return err
 	}
 
-	if int(q.headGlobalIndex) >= q.queueSize*(int(q.currentPage)+1) {
+	if q.headGlobalIndex == q.queueSize {
+		q.headGlobalIndex = 0
 		err = q.rotateFile()
 		if err != nil {
 			return err
@@ -455,7 +444,6 @@ func (q *Queue[T]) writeQueue(b []byte) error {
 
 func (q *Queue[T]) rotateFile() error {
 	q.queueFile.Close()
-	q.headGlobalIndex = 0
 	q.currentPage++
 	if q.currentPage == q.maxPages {
 		q.currentPage = 0
@@ -584,7 +572,7 @@ func (q *Queue[T]) initialize(localIndex int) {
 
 		nextPage := q.currentPage
 		if q.headGlobalIndex == q.queueSize {
-			nextPage := q.currentPage + 1
+			nextPage = q.currentPage + 1
 			if nextPage == q.maxPages {
 				nextPage = 0
 			}

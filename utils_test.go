@@ -129,16 +129,16 @@ func TestReadIndex(t *testing.T) {
 			name:                   "file does not exist",
 			input:                  "testdata/utils/read_index/ffq/index_new",
 			expectedPage:           0,
-			expectedGlobalIndexVal: 0,
-			expectedLocalIndexVal:  0,
+			expectedGlobalIndexVal: -1,
+			expectedLocalIndexVal:  -1,
 			expectedErr:            "",
 		},
 		{
 			name:                   "file cannnot open invalid permission",
 			input:                  "testdata/utils/read_index/ffq/index_invalid_permission",
 			expectedPage:           0,
-			expectedGlobalIndexVal: 0,
-			expectedLocalIndexVal:  0,
+			expectedGlobalIndexVal: -1,
+			expectedLocalIndexVal:  -1,
 			expectedErr:            "permission denied",
 		},
 		{
@@ -153,25 +153,32 @@ func TestReadIndex(t *testing.T) {
 			name:                   "read from invalid short data",
 			input:                  "testdata/utils/read_index/ffq/index_invalid_eof",
 			expectedPage:           0,
-			expectedGlobalIndexVal: 0,
-			expectedLocalIndexVal:  0,
+			expectedGlobalIndexVal: -1,
+			expectedLocalIndexVal:  -1,
 			expectedErr:            "EOF",
 		},
 		{
-			name:                   "read from invalid string data",
-			input:                  "testdata/utils/read_index/ffq/index_invalid_string",
+			name:                   "read from index that do not include globalIndex",
+			input:                  "testdata/utils/read_index/ffq/index_invalid_cannot_read_globalindex",
 			expectedPage:           0,
-			expectedGlobalIndexVal: 0,
-			expectedLocalIndexVal:  0,
-			expectedErr:            "unexpected EOF",
+			expectedGlobalIndexVal: -1,
+			expectedLocalIndexVal:  -1,
+			expectedErr:            "EOF",
+		},
+		{
+			name:                   "read from index that do not include localIndex",
+			input:                  "testdata/utils/read_index/ffq/index_invalid_cannot_read_localindex",
+			expectedPage:           0,
+			expectedGlobalIndexVal: 12345,
+			expectedLocalIndexVal:  -1,
+			expectedErr:            "EOF",
 		},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			actualPage, actualGlobalIndexVal, actualLocalIndexVal, actualErr := readIndex(tt.input)
 			if actualPage != tt.expectedPage {
-				t.Fatalf("Failed test: %s, expectedSeekEnd: %v, actualSeekEnd: %v", tt.name, tt.expectedGlobalIndexVal, actualGlobalIndexVal)
+				t.Fatalf("Failed test: %s, expectedPage: %v, actualPage: %v", tt.name, tt.expectedPage, actualPage)
 			}
 			if actualGlobalIndexVal != tt.expectedGlobalIndexVal {
 				t.Fatalf("Failed test: %s, expectedGlobalIndexVal: %v, actualGlobalIndexVal: %v", tt.name, tt.expectedGlobalIndexVal, actualGlobalIndexVal)
