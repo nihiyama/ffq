@@ -2,7 +2,7 @@
 package ffq
 
 import (
-	"fmt"
+	"encoding/binary"
 	"os"
 )
 
@@ -28,25 +28,34 @@ func openIndexFile(indexFilepath string) (*os.File, error) {
 	return indexFile, err
 }
 
-func readIndex(indexFilepath string) (int, error) {
+func readIndex(indexFilepath string) (int, int, int, error) {
 	var err error
 	if _, err := os.Stat(indexFilepath); os.IsNotExist(err) {
-		return 0, nil
+		return 0, 0, 0, nil
 	}
 	indexFile, err := os.Open(indexFilepath)
 	if err != nil {
-		return 0, err
+		return 0, 0, 0, err
 	}
-	// uint64 size is 10
-	buffer := make([]byte, 10)
-	_, err = indexFile.Read(buffer)
+	defer indexFile.Close()
+
+	// uint32 size is 4
+	// | -- page(4) -- | -- globalIndex(4) -- | -- localIndex(4) -- |
+	var page uint32
+	var globalIndex uint32
+	var localIndex uint32
+	err = binary.Read(indexFile, binary.LittleEndian, &page)
 	if err != nil {
-		return 0, err
+		return 0, 0, 0, err
 	}
-	var index int
-	_, err = fmt.Sscanf(string(buffer), "%d", &index)
+	err = binary.Read(indexFile, binary.LittleEndian, &globalIndex)
 	if err != nil {
-		return 0, err
+		return int(page), 0, 0, err
 	}
-	return index, nil
+	err = binary.Read(indexFile, binary.LittleEndian, &localIndex)
+	if err != nil {
+		return int(page), int(globalIndex), 0, err
+	}
+
+	return int(page), int(globalIndex), int(localIndex), nil
 }

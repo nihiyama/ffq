@@ -7,7 +7,7 @@ tasks:
     dir: "{{.ROOT_DIR}}"
     cmds:
       - chmod 111 testdata/utils/read_index/ffq/index_invalid_permission
-      - go test -v -coverprofile=coverage.out $(go list ./... | grep -v "examples")
+      - go test -v -timeout 10s -coverprofile=coverage.out $(go list ./... | grep -v "examples")
       - go tool cover -func=coverage.out
       - chmod 644 testdata/utils/read_index/ffq/index_invalid_permission
     silent: true
@@ -17,4 +17,12 @@ tasks:
     dir: "{{.ROOT_DIR}}"
     cmds:
       - go test -benchmem -run=^$ -bench ^Benchmark github.com/nihiyama/ffq
+    silent: true
+
+  bench-cpu:
+    desc: run go benchmark
+    dir: "{{.ROOT_DIR}}"
+    cmds:
+      - go test -benchmem -cpuprofile profile.out -run=^$ -bench ^Benchmark github.com/nihiyama/ffq
+      - go tool pprof -http=:8080 profile.out
     silent: true

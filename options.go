@@ -6,13 +6,11 @@ import (
 )
 
 type options struct {
-	fileDir          *string
-	queueSize        *int
-	enqueueWriteSize *int
-	pageSize         *int
-	dataFixedLength  *uint64
-	jsonEncoder      *func(v any) ([]byte, error)
-	jsonDecoder      *func(data []byte, v any) error
+	fileDir   *string
+	queueSize *int
+	maxPages  *int
+	encoder   *func(v any) ([]byte, error)
+	decoder   *func(data []byte, v any) error
 }
 
 // Option defines a function type that modifies the options for creating a Queue or GroupQueue.
@@ -62,107 +60,61 @@ func WithQueueSize(size int) Option {
 	}
 }
 
-// WithEnqueueWriteSize sets the number of items to write to disk in each batch.
-//
-// Parameters:
-//   - size: The number of items to write. Must be greater than 0.
-//
-// Returns:
-//   - Option: An Option function that sets the enqueueWriteSize in the options struct.
-//   - error: Returns an error if the size is less than 1.
-//
-// Example:
-//
-//	queue, err := NewQueue("myQueue", WithEnqueueWriteSize(10))
-func WithEnqueueWriteSize(size int) Option {
-	return func(options *options) error {
-		if size < 1 {
-			err := errors.New("enqueueWriteSize must be set to greater than 0")
-			return errors.Join(ErrQueueOption, err)
-		}
-		options.enqueueWriteSize = &size
-		return nil
-	}
-}
-
-// WithPageSize sets the number of files used in a single rotation cycle.
+// WithMaxPages sets the number of files used in a single rotation cycle.
 //
 // Parameters:
 //   - size: The number of pages. Must be greater than 1.
 //
 // Returns:
-//   - Option: An Option function that sets the pageSize in the options struct.
+//   - Option: An Option function that sets the maxPages in the options struct.
 //   - error: Returns an error if the size is less than 2.
 //
 // Example:
 //
-//	queue, err := NewQueue("myQueue", WithPageSize(2))
-func WithPageSize(size int) Option {
+//	queue, err := NewQueue("myQueue", WithMaxPages(2))
+func WithMaxPages(size int) Option {
 	return func(options *options) error {
 		if size < 2 {
-			err := errors.New("pageSize must be set to greater than 1")
+			err := errors.New("maxPages must be set to greater than 1")
 			return errors.Join(ErrQueueOption, err)
 		}
-		options.pageSize = &size
+		options.maxPages = &size
 		return nil
 	}
 }
 
-// WithDataFixedLength sets the fixed size of the data block written to each file.
+// WithEncoder sets a custom JSON encoder function.
 //
 // Parameters:
-//   - length: The fixed length of the data block. Must be greater than 0.
+//   - encoder: A function that encodes data to JSON.
 //
 // Returns:
-//   - Option: An Option function that sets the dataFixedLength in the options struct.
-//   - error: Returns an error if the length is less than 1.
+//   - Option: An Option function that sets the encoder in the options struct.
 //
 // Example:
 //
-//	queue, err := NewQueue("myQueue", WithDataFixedLength(8192))
-func WithDataFixedLength(length uint64) Option {
+//	queue, err := NewQueue("myQueue", WithEncoder(sonic.Marshal))
+func WithEncoder(encoder func(v any) ([]byte, error)) Option {
 	return func(options *options) error {
-		if length < 1 {
-			err := errors.New("dataFixedLength must be set to greater than 0")
-			return errors.Join(ErrQueueOption, err)
-		}
-		options.dataFixedLength = &length
+		options.encoder = &encoder
 		return nil
 	}
 }
 
-// WithJSONEncoder sets a custom JSON encoder function.
+// WithDecoder sets a custom JSON decoder function.
 //
 // Parameters:
-//   - jsonEncoder: A function that encodes data to JSON.
+//   - decoder: A function that decodes data from JSON.
 //
 // Returns:
-//   - Option: An Option function that sets the jsonEncoder in the options struct.
+//   - Option: An Option function that sets the decoder in the options struct.
 //
 // Example:
 //
-//	queue, err := NewQueue("myQueue", WithJSONEncoder(sonic.Marshal))
-func WithJSONEncoder(jsonEncoder func(v any) ([]byte, error)) Option {
+//	queue, err := NewQueue("myQueue", WithDecoder(sonic.Unmarshal))
+func WithDecoder(decoder func(data []byte, v any) error) Option {
 	return func(options *options) error {
-		options.jsonEncoder = &jsonEncoder
-		return nil
-	}
-}
-
-// WithJSONDecoder sets a custom JSON decoder function.
-//
-// Parameters:
-//   - jsonDecoder: A function that decodes data from JSON.
-//
-// Returns:
-//   - Option: An Option function that sets the jsonDecoder in the options struct.
-//
-// Example:
-//
-//	queue, err := NewQueue("myQueue", WithJSONDecoder(sonic.Unmarshal))
-func WithJSONDecoder(jsonDecoder func(data []byte, v any) error) Option {
-	return func(options *options) error {
-		options.jsonDecoder = &jsonDecoder
+		options.decoder = &decoder
 		return nil
 	}
 }

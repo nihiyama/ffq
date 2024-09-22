@@ -81,15 +81,14 @@ func BenchmarkSimpleQueueEnqueueDequeue(b *testing.B) {
 		b.Run(fmt.Sprintf("Size%d", tt), func(b *testing.B) {
 			dir := fmt.Sprintf("testdata/benchmark/simple_queue/single/%d/ffq", tt)
 			data := createData(tt)
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
 				q, _ := ffq.NewQueue[BenchmarkData](
 					"benchmark",
 					ffq.WithFileDir(dir),
 					ffq.WithQueueSize(1000),
-					ffq.WithEnqueueWriteSize(15),
-					ffq.WithPageSize(3),
-					ffq.WithDataFixedLength(4),
+					ffq.WithMaxPages(3),
 				)
 				q.WaitInitialize()
 				var wg sync.WaitGroup
@@ -131,15 +130,14 @@ func BenchmarkSimpleQueueBulkEnqueueDequeue(b *testing.B) {
 		b.Run(fmt.Sprintf("Size%d", tt), func(b *testing.B) {
 			dir := fmt.Sprintf("testdata/benchmark/simple_queue/bulk/%d/ffq", tt)
 			data := createData(tt)
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
 				q, _ := ffq.NewQueue[BenchmarkData](
 					"benchmark",
 					ffq.WithFileDir(dir),
 					ffq.WithQueueSize(1000),
-					ffq.WithEnqueueWriteSize(15),
-					ffq.WithPageSize(3),
-					ffq.WithDataFixedLength(4),
+					ffq.WithMaxPages(3),
 				)
 				q.WaitInitialize()
 				var wg sync.WaitGroup
@@ -180,6 +178,7 @@ func BenchmarkGroupQueueEnqueueDequeue_3Group(b *testing.B) {
 		b.Run(fmt.Sprintf("Size%d", tt), func(b *testing.B) {
 			dir := fmt.Sprintf("testdata/benchmark/group_queue/single/%d/ffq", tt)
 			data := createData(tt)
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
 				total := len(data) * len(testQueues)
@@ -187,9 +186,7 @@ func BenchmarkGroupQueueEnqueueDequeue_3Group(b *testing.B) {
 					"benchmark",
 					ffq.WithFileDir(dir),
 					ffq.WithQueueSize(1000),
-					ffq.WithEnqueueWriteSize(15),
-					ffq.WithPageSize(3),
-					ffq.WithDataFixedLength(4),
+					ffq.WithMaxPages(3),
 				)
 				gq.WaitInitialize()
 				var wg sync.WaitGroup
@@ -245,6 +242,7 @@ func BenchmarkGroupQueueBulkEnqueueDequeue_3Group(b *testing.B) {
 		b.Run(fmt.Sprintf("Size%d", tt), func(b *testing.B) {
 			dir := fmt.Sprintf("testdata/benchmark/group_queue/bulk/%d/ffq", tt)
 			data := createData(tt)
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
 				total := len(data) * len(testQueues)
@@ -252,9 +250,7 @@ func BenchmarkGroupQueueBulkEnqueueDequeue_3Group(b *testing.B) {
 					"benchmark",
 					ffq.WithFileDir(dir),
 					ffq.WithQueueSize(1000),
-					ffq.WithEnqueueWriteSize(15),
-					ffq.WithPageSize(3),
-					ffq.WithDataFixedLength(4),
+					ffq.WithMaxPages(3),
 				)
 				gq.WaitInitialize()
 				var wg sync.WaitGroup

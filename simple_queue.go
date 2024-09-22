@@ -2,18 +2,22 @@
 package ffq
 
 import (
+	"bufio"
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
 var (
 	indexFilename = "index"
+	queueFilename = "queue"
 )
 
 // Queue represents a file-based FIFO queue with generic type T.
@@ -24,36 +28,32 @@ var (
 //   - name: The name of the queue.
 //   - fileDir: The directory where the queue files are stored.
 //   - queueSize: The maximum number of items that can be held in the queue.
-//   - enqueueWriteSize: The number of items to write to disk in each batch.
-//   - pageSize: The number of files used in a single rotation cycle.
-//   - dataFixedLength: The fixed size of the data block written to each file.
+//   - maxPages: The number of files used in a single rotation cycle.
 //   - maxFileSize: The maximum size of a single queue file.
 //   - maxIndexSize: The maximum size of the index file.
 //   - queue: The in-memory queue channel that holds the messages.
-//   - headIndex: The current index of the head of the queue.
+//   - headGlobalIndex: The current index of the head of the queue.
 //   - currentPage: The current page (file) being written to.
 //   - queueFile: The file currently being written to.
 //   - indexFile: The file storing the index of the queue.
-//   - jsonEncoder: A function to encode data to JSON.
-//   - jsonDecoder: A function to decode data from JSON.
+//   - encoder: A function to encode data to JSON.
+//   - decoder: A function to decode data from JSON.
 //   - initializeBlock: A channel to block until initialization is complete.
 type Queue[T any] struct {
-	name             string
-	fileDir          string
-	queueSize        int
-	enqueueWriteSize int
-	pageSize         int
-	dataFixedLength  uint64
-	maxFileSize      uint64
-	maxIndexSize     int
-	queue            chan *Message[T]
-	headIndex        int
-	currentPage      int
-	queueFile        *os.File
-	indexFile        *os.File
-	jsonEncoder      func(v any) ([]byte, error)
-	jsonDecoder      func(data []byte, v any) error
-	initializeBlock  chan struct{}
+	queueSize       int
+	maxPages        int
+	currentPage     int
+	headGlobalIndex int
+	name            string
+	fileDir         string
+	queue           chan *Message[T]
+	queueFile       *os.File
+	indexFile       *os.File
+	encoder         func(v any) ([]byte, error)
+	decoder         func(data []byte, v any) error
+	initializeBlock chan struct{}
+	qMu             *sync.Mutex
+	iMu             *sync.Mutex
 }
 
 // NewQueue creates a new file-based FIFO queue.
@@ -98,71 +98,56 @@ func NewQueue[T any](name string, opts ...Option) (*Queue[T], error) {
 		queueSize = *options.queueSize
 	}
 
-	enqueueWriteSize := 15
-	if options.enqueueWriteSize != nil {
-		enqueueWriteSize = *options.enqueueWriteSize
+	maxPages := 2
+	if options.maxPages != nil {
+		maxPages = *options.maxPages
 	}
 
-	pageSize := 2
-	if options.pageSize != nil {
-		pageSize = *options.pageSize
+	var encoder func(v any) ([]byte, error) = json.Marshal
+	if options.encoder != nil {
+		encoder = *options.encoder
 	}
 
-	var dataFixedLength uint64 = 4 * 1024 * uint64(enqueueWriteSize)
-	if options.dataFixedLength != nil {
-		dataFixedLength = *options.dataFixedLength * 1024 * uint64(enqueueWriteSize)
+	var decoder func(data []byte, v any) error = json.Unmarshal
+	if options.decoder != nil {
+		decoder = *options.decoder
 	}
-
-	var jsonEncoder func(v any) ([]byte, error) = json.Marshal
-	if options.jsonEncoder != nil {
-		jsonEncoder = *options.jsonEncoder
-	}
-
-	var jsonDecoder func(data []byte, v any) error = json.Unmarshal
-	if options.jsonDecoder != nil {
-		jsonDecoder = *options.jsonDecoder
-	}
-
-	maxFileSize := uint64(queueSize) * dataFixedLength
-	maxIndexSize := queueSize * pageSize * enqueueWriteSize
 
 	queue := make(chan *Message[T], queueSize)
 
 	// open index file
 	indexFilePath := filepath.Join(fileDir, indexFilename)
-	tailIndex, err := readIndex(indexFilePath)
+	currentPage, tailGlobalIndex, tailLocalIndex, err := readIndex(indexFilePath)
 	if err != nil {
 		return nil, err
 	}
-	headIndex := tailIndex + 1
 
 	indexFile, err := openIndexFile(indexFilePath)
 	if err != nil {
 		return nil, err
 	}
 
-	startPosition := uint64((headIndex / enqueueWriteSize)) * dataFixedLength
 	initializeBlock := make(chan struct{})
+	var qMu sync.Mutex
+	var iMu sync.Mutex
 
 	q := Queue[T]{
-		name:             name,
-		fileDir:          fileDir,
-		queueSize:        queueSize,
-		enqueueWriteSize: enqueueWriteSize,
-		pageSize:         pageSize,
-		dataFixedLength:  dataFixedLength,
-		maxFileSize:      maxFileSize,
-		maxIndexSize:     maxIndexSize,
-		queue:            queue,
-		headIndex:        headIndex,
-		indexFile:        indexFile,
-		jsonEncoder:      jsonEncoder,
-		jsonDecoder:      jsonDecoder,
-		initializeBlock:  initializeBlock,
+		name:            name,
+		fileDir:         fileDir,
+		queueSize:       queueSize,
+		maxPages:        maxPages,
+		currentPage:     currentPage,
+		queue:           queue,
+		indexFile:       indexFile,
+		encoder:         encoder,
+		decoder:         decoder,
+		initializeBlock: initializeBlock,
+		qMu:             &qMu,
+		iMu:             &iMu,
 	}
 
 	go func() {
-		q.initialize(startPosition)
+		q.initialize(tailGlobalIndex, tailLocalIndex)
 	}()
 
 	return &q, nil
@@ -184,29 +169,32 @@ func NewQueue[T any](name string, opts ...Option) (*Queue[T], error) {
 //	  log.Fatal(err)
 //	}
 func (q *Queue[T]) Enqueue(data *T) error {
+	q.qMu.Lock()
+	defer q.qMu.Unlock()
 	// write queue file
 	var err error
-	dataWithNil := make([]*T, q.enqueueWriteSize)
-	dataWithNil[0] = data
-	jsonData, err := q.jsonEncoder(dataWithNil)
+
+	buf, err := q.encoder([]*T{data})
 	if err != nil {
 		return err
 	}
-	paddedData := make([]byte, q.dataFixedLength)
-	copy(paddedData, jsonData)
 
 	// write queue channel
-	q.queue <- &Message[T]{name: q.name, index: q.headIndex, data: data}
-	q.headIndex += q.enqueueWriteSize
-	if q.headIndex == q.maxIndexSize {
-		q.headIndex = 0
+	q.queue <- &Message[T]{
+		name:        q.name,
+		page:        q.currentPage,
+		globalIndex: q.headGlobalIndex,
+		localIndex:  0,
+		data:        data,
 	}
 
-	err = q.writeFile(paddedData)
+	q.headGlobalIndex++
+
+	err = q.writeQueue(buf)
 	if err != nil {
 		return err
 	}
-	return nil
+	return err
 }
 
 // BulkEnqueue adds multiple items to the queue in a single operation.
@@ -225,39 +213,29 @@ func (q *Queue[T]) Enqueue(data *T) error {
 //		log.Fatal(err)
 //	}
 func (q *Queue[T]) BulkEnqueue(data []*T) error {
+	q.qMu.Lock()
+	defer q.qMu.Unlock()
+
 	var err error
-	// if data length is 123, enqueueWriteSize is 10 and dataFixedLength is 4kb
-	// paddedData is 12 * 4kb + 4kb
-	paddedData := make([]byte, uint64(len(data)/q.enqueueWriteSize)*q.dataFixedLength+q.dataFixedLength)
-	l := len(data)
-	for i := 0; i < l; i += q.enqueueWriteSize {
-		var jsonData []byte
-		if i+q.enqueueWriteSize < l {
-			jsonData, err = q.jsonEncoder(data[i : i+q.enqueueWriteSize])
-		} else {
-			// create include null data
-			dataWithNil := make([]*T, q.enqueueWriteSize)
-			copy(dataWithNil, data[i:l])
-			jsonData, err = q.jsonEncoder(dataWithNil)
-		}
-		if err != nil {
-			return err
-		}
-		copy(paddedData[uint64(i/q.enqueueWriteSize)*q.dataFixedLength:], jsonData)
-		for j := i; j < i+q.enqueueWriteSize; j++ {
-			if j < l {
-				q.queue <- &Message[T]{name: q.name, index: q.headIndex, data: data[j]}
-				q.headIndex++
-			} else {
-				q.headIndex += i + q.enqueueWriteSize - j
-				break
-			}
-		}
-		if q.headIndex == q.maxIndexSize {
-			q.headIndex = 0
+
+	buf, err := q.encoder(data)
+	if err != nil {
+		return err
+	}
+
+	for i := 0; i < len(data); i++ {
+		q.queue <- &Message[T]{
+			name:        q.name,
+			page:        q.currentPage,
+			globalIndex: q.headGlobalIndex,
+			localIndex:  i,
+			data:        data[i],
 		}
 	}
-	err = q.writeFile(paddedData)
+
+	q.headGlobalIndex++
+
+	err = q.writeQueue(buf)
 	if err != nil {
 		return err
 	}
@@ -354,7 +332,7 @@ func (q *Queue[T]) FuncAfterDequeue(f func(*T) error) error {
 		return err
 	}
 
-	err = q.writeIndex(message.index)
+	err = q.writeIndex(message.page, message.globalIndex, message.localIndex)
 	if err != nil {
 		return err
 	}
@@ -390,7 +368,9 @@ func (q *Queue[T]) FuncAfterBulkDequeue(size int, lazy time.Duration, f func([]*
 	if !ok {
 		return ErrQueueClose
 	}
-	index := m.index
+	page := m.page
+	globalIndex := m.globalIndex
+	localIndex := m.localIndex
 	data = append(data, m.data)
 	timer := time.After(lazy)
 LOOP:
@@ -404,7 +384,9 @@ LOOP:
 				return err
 			}
 			data = append(data, m.data)
-			index = m.index
+			page = m.page
+			globalIndex = m.globalIndex
+			localIndex = m.localIndex
 			if len(data) == size {
 				break LOOP
 			}
@@ -414,45 +396,42 @@ LOOP:
 	if fErr != nil {
 		err = errors.Join(err, fErr)
 	}
-	wiErr := q.writeIndex(index)
+	wiErr := q.writeIndex(page, globalIndex, localIndex)
 	if err != nil {
 		err = errors.Join(err, wiErr)
 	}
 	return err
 }
 
-func (q *Queue[T]) writeFile(data []byte) error {
-	offset := 0
-	stat, err := q.queueFile.Stat()
+func (q *Queue[T]) writeQueue(b []byte) error {
+	var err error
+
+	buf := queueBufPool.Get().(*bytes.Buffer)
+	defer queueBufPool.Put(buf)
+
+	buf.Reset()
+	buf.Grow(len(b) + 1)
+
+	_, err = buf.Write(b)
 	if err != nil {
 		return err
 	}
-	fileSize := uint64(stat.Size())
-	space := q.maxFileSize - fileSize
-	for offset < len(data) {
-		writeSize := uint64(len(data) - offset)
-		if writeSize > space {
-			writeSize = space
-		}
+	// add LF
+	_, err = buf.Write([]byte{0x00A})
+	if err != nil {
+		return err
+	}
 
-		_, err = q.queueFile.Write(data[offset : offset+int(writeSize)])
+	_, err = buf.WriteTo(q.queueFile)
+	if err != nil {
+		return err
+	}
+
+	if q.headGlobalIndex == q.queueSize {
+		q.headGlobalIndex = 0
+		err = q.rotateFile()
 		if err != nil {
 			return err
-		}
-		space -= writeSize
-		offset += int(writeSize)
-
-		if space == 0 {
-			err = q.rotateFile()
-			if err != nil {
-				return err
-			}
-			stat, err = q.queueFile.Stat()
-			if err != nil {
-				return err
-			}
-			fileSize = uint64(stat.Size())
-			space = q.maxFileSize - fileSize
 		}
 	}
 	return nil
@@ -460,15 +439,16 @@ func (q *Queue[T]) writeFile(data []byte) error {
 
 func (q *Queue[T]) rotateFile() error {
 	q.queueFile.Close()
-	q.currentPage += 1
-	if q.currentPage == q.pageSize {
+	q.currentPage++
+	if q.currentPage == q.maxPages {
 		q.currentPage = 0
 	}
-	newFile, err := os.Create(filepath.Join(q.fileDir, fmt.Sprintf("queue.%d", q.currentPage)))
+	newQueueFilepath := filepath.Join(q.fileDir, fmt.Sprintf("%s.%d", queueFilename, q.currentPage))
+	newQueueFile, err := os.Create(newQueueFilepath)
 	if err != nil {
 		return err
 	}
-	q.queueFile = newFile
+	q.queueFile = newQueueFile
 	return nil
 }
 
@@ -487,26 +467,36 @@ func (q *Queue[T]) rotateFile() error {
 //	  log.Fatal(err)
 //	}
 func (q *Queue[T]) UpdateIndex(message *Message[T]) error {
-	return q.writeIndex(message.index)
+	return q.writeIndex(message.page, message.globalIndex, message.localIndex)
 }
 
-func (q *Queue[T]) writeIndex(index int) error {
+func (q *Queue[T]) writeIndex(page int, globalIndex int, localIndex int) error {
 	var err error
+	q.iMu.Lock()
+	defer q.iMu.Unlock()
 
 	_, err = q.indexFile.Seek(0, io.SeekStart)
 	if err != nil {
 		return err
 	}
-	// uin64 size is 19
-	indexStr := fmt.Sprintf("%0*d", 10, index)
-	_, err = q.indexFile.Write([]byte(indexStr))
+
+	buf := indexBufPool.Get().(*[12]byte)
+	defer indexBufPool.Put(buf)
+
+	// uint32 size is 4
+	// | -- page(4) -- | -- globalIndex(4) -- |-- localIndex(4) -- |
+	binary.LittleEndian.PutUint32((*buf)[0:4], uint32(page))
+	binary.LittleEndian.PutUint32((*buf)[4:8], uint32(globalIndex))
+	binary.LittleEndian.PutUint32((*buf)[8:12], uint32(localIndex))
+
+	_, err = q.indexFile.Write((*buf)[:])
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-// Lengt1 returns the current length of the queue.
+// Length returns the current length of the queue.
 //
 // Returns:
 //   - int: The number of items currently in the queue.
@@ -519,32 +509,25 @@ func (q *Queue[T]) Length() int {
 	return len(q.queue)
 }
 
-func (q *Queue[T]) initialize(startPosition uint64) {
-	var (
-		err       error
-		queueFile *os.File
-	)
-	buffer := make([]byte, q.dataFixedLength)
-	startIndex := startPosition / q.dataFixedLength * uint64(q.enqueueWriteSize)
-	isStart := true
-	for {
-		currentPage := int(startPosition / q.maxFileSize)
-		if currentPage == q.pageSize {
-			currentPage = 0
-		}
-		queueFilepath := filepath.Join(q.fileDir, fmt.Sprintf("queue.%d", currentPage))
+func (q *Queue[T]) initialize(tailGlobalIndex int, tailLocalIndex int) {
+	var queueFile *os.File
+	isLast := true
 
-		// queue file is not exist
-		if _, err := os.Stat(queueFilepath); os.IsNotExist(err) {
-			// create queue file and return
-			queueFile, err = os.Create(queueFilepath)
-			if err != nil {
-				panic(fmt.Sprintf("could not create file, %s, %v", queueFilepath, err))
+	for {
+		queueFilepath := filepath.Join(q.fileDir, fmt.Sprintf("%s.%d", queueFilename, q.currentPage))
+
+		stat, err := os.Stat(queueFilepath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				queueFile, err = os.Create(queueFilepath)
+				if err != nil {
+					panic(fmt.Sprintf("could not create file, %s, %v", queueFilepath, err))
+				}
+				q.queueFile = queueFile
+				break
+			} else {
+				panic(err)
 			}
-			q.queueFile = queueFile
-			q.currentPage = currentPage
-			q.headIndex = currentPage * q.queueSize * q.enqueueWriteSize
-			break
 		}
 
 		// read queue file and set queue
@@ -553,52 +536,73 @@ func (q *Queue[T]) initialize(startPosition uint64) {
 			panic(fmt.Sprintf("could not open file, %s, %v", queueFilepath, err))
 		}
 		q.queueFile = queueFile
-		pageStartPosition := startPosition % q.maxFileSize
-		_, err = q.queueFile.Seek(int64(pageStartPosition), io.SeekStart)
-		if err != nil {
-			panic(fmt.Sprintf("could not seek file, %s, %v", queueFilepath, err))
-		}
-		for {
-			_, err := q.queueFile.Read(buffer)
-			if err != nil {
-				if err == io.EOF {
-					break
-				}
-				panic(fmt.Sprintf("could not read file, %s, %v", queueFilepath, err))
+		scanner := bufio.NewScanner(q.queueFile)
+
+		i := 0
+		for scanner.Scan() {
+			if i < tailGlobalIndex {
+				i++
+				continue
 			}
+			b := scanner.Bytes()
 			var data []*T
-			err = q.jsonDecoder(bytes.Trim(buffer, "\x00"), &data)
+			err = q.decoder(b, &data)
 			if err != nil {
-				panic(fmt.Sprintf("could not UnMarshal data, %s, %v", string(buffer), err))
+				panic(fmt.Sprintf("could not UnMarshal data, %s, %v", string(b), err))
 			}
-			if isStart {
-				for _, d := range data[uint64(q.headIndex)-startIndex:] {
-					if d != nil {
-						q.queue <- &Message[T]{name: q.name, index: q.headIndex, data: d}
-					}
-					q.headIndex++
+			for j := tailLocalIndex; j < len(data); j++ {
+				if isLast {
+					isLast = false
+					continue
 				}
-				isStart = false
-			} else {
-				for _, d := range data {
-					if d != nil {
-						q.queue <- &Message[T]{name: q.name, index: q.headIndex, data: d}
-					}
-					q.headIndex++
+				q.queue <- &Message[T]{
+					name:        q.name,
+					globalIndex: tailGlobalIndex,
+					localIndex:  j,
+					data:        data[j],
 				}
-				startPosition += q.dataFixedLength
+			}
+			tailLocalIndex = 0
+			i++
+			tailGlobalIndex++
+			q.headGlobalIndex = tailGlobalIndex
+		}
+
+		if err := scanner.Err(); err != nil {
+			panic(fmt.Sprintf("scan error, file: %s, %v", queueFilepath, err))
+		}
+
+		nextPage := q.currentPage
+		if q.headGlobalIndex == q.queueSize {
+			tailGlobalIndex = 0
+			q.headGlobalIndex = tailGlobalIndex
+			nextPage = q.currentPage + 1
+			if nextPage == q.maxPages {
+				nextPage = 0
 			}
 		}
 
-		// check next file
-		nextPage := int(startPosition / q.maxFileSize)
-		if currentPage == nextPage {
+		if nextPage != q.currentPage {
+			nextQueueFilepath := filepath.Join(q.fileDir, fmt.Sprintf("%s.%d", queueFilename, nextPage))
+			nextStat, err := os.Stat(nextQueueFilepath)
+			if err != nil {
+				if !os.IsNotExist(err) {
+					panic(err)
+				}
+			} else {
+				if stat.ModTime().After(nextStat.ModTime()) {
+					os.Remove(nextQueueFilepath)
+				}
+			}
+			q.currentPage = nextPage
+		} else {
 			break
 		}
 	}
 
 	// release blocking
 	q.initializeBlock <- struct{}{}
+	close(q.initializeBlock)
 }
 
 // WaitInitialize blocks until the queue initialization is complete.

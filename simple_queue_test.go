@@ -2,6 +2,7 @@ package ffq
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -11,41 +12,28 @@ import (
 
 func TestNewQueue(t *testing.T) {
 	tests := []struct {
-		name             string
-		fileDir          string
-		queueSize        int
-		enqueueWriteSize int
-		pageSize         int
-		dataFixedLength  uint64
-		jsonEncoder      func(v any) ([]byte, error)
-		jsonDecoder      func(data []byte, v any) error
-		afterRemove      bool
+		name        string
+		fileDir     string
+		queueSize   int
+		maxPages    int
+		encoder     func(v any) ([]byte, error)
+		decoder     func(data []byte, v any) error
+		afterRemove bool
 	}{
 		{
-			name:             "exist queue",
-			fileDir:          "testdata/simple_queue/new_queue/ffq",
-			queueSize:        5,
-			enqueueWriteSize: 10,
-			pageSize:         3,
-			dataFixedLength:  4,
-			jsonEncoder:      json.Marshal,
-			jsonDecoder:      json.Unmarshal,
-			afterRemove:      false,
-		},
-		{
-			name:             "new queue",
-			fileDir:          "testdata/simple_queue/new_queue/ffq_new",
-			queueSize:        5,
-			enqueueWriteSize: 10,
-			pageSize:         3,
-			dataFixedLength:  4,
-			jsonEncoder:      json.Marshal,
-			jsonDecoder:      json.Unmarshal,
-			afterRemove:      true,
+			name:        "new queue",
+			fileDir:     "testdata/simple_queue/new_queue/ffq_new",
+			queueSize:   5,
+			maxPages:    3,
+			encoder:     json.Marshal,
+			decoder:     json.Unmarshal,
+			afterRemove: true,
 		},
 	}
 
-	type Data struct{}
+	type Data struct {
+		Value int
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.afterRemove {
@@ -54,24 +42,13 @@ func TestNewQueue(t *testing.T) {
 			actual, _ := NewQueue[Data]("testQueue",
 				WithFileDir(tt.fileDir),
 				WithQueueSize(tt.queueSize),
-				WithEnqueueWriteSize(tt.enqueueWriteSize),
-				WithPageSize(tt.pageSize),
-				WithDataFixedLength(tt.dataFixedLength),
-				WithJSONEncoder(tt.jsonEncoder),
-				WithJSONDecoder(tt.jsonDecoder),
+				WithMaxPages(tt.maxPages),
+				WithEncoder(tt.encoder),
+				WithDecoder(tt.decoder),
 			)
 
-			if tt.queueSize != actual.queueSize {
-				t.Errorf("Failed test: queueSize, expect: %v, actual: %v", tt.queueSize, actual.queueSize)
-			}
-			if tt.enqueueWriteSize != actual.enqueueWriteSize {
-				t.Errorf("Failed test: enqueueWriteSize, expect: %v, actual: %v", tt.enqueueWriteSize, actual.enqueueWriteSize)
-			}
-			if tt.pageSize != actual.pageSize {
-				t.Errorf("Failed test: pageSize, expect: %v, actual: %v", tt.pageSize, actual.pageSize)
-			}
-			if tt.dataFixedLength*1024*uint64(tt.enqueueWriteSize) != actual.dataFixedLength {
-				t.Errorf("Failed test: dataFixedLength, expect: %v, actual: %v", tt.dataFixedLength*1024*uint64(tt.enqueueWriteSize), actual.dataFixedLength)
+			if tt.maxPages != actual.maxPages {
+				t.Errorf("Failed test: maxPages, expect: %v, actual: %v", tt.maxPages, actual.maxPages)
 			}
 			if tt.fileDir != actual.fileDir {
 				t.Errorf("Failed test: fileDir, expect: %v, actual: %v", tt.fileDir, actual.fileDir)
@@ -92,6 +69,309 @@ func TestNewQueue(t *testing.T) {
 			}
 			if err := actual.CloseIndex(); err != nil {
 				t.Errorf("CloseIndex failed: %v", err)
+			}
+		})
+	}
+}
+
+func TestNewQueue_initialize_enqueue(t *testing.T) {
+	tests := []struct {
+		name                  string
+		fileDir               string
+		queueSize             int
+		maxPages              int
+		enqueNum              int
+		beforeDequeueNum      int
+		expectHeadGlobalIndex int
+		expectCurrentPage     int
+		encoder               func(v any) ([]byte, error)
+		decoder               func(data []byte, v any) error
+		afterRemove           bool
+	}{
+		{
+			name:                  "restart",
+			fileDir:               "testdata/simple_queue/new_queue/ffq_initialize_restart",
+			queueSize:             5,
+			maxPages:              3,
+			enqueNum:              4,
+			beforeDequeueNum:      3,
+			expectHeadGlobalIndex: 4,
+			expectCurrentPage:     0,
+			encoder:               json.Marshal,
+			decoder:               json.Unmarshal,
+			afterRemove:           true,
+		},
+		{
+			name:                  "next page",
+			fileDir:               "testdata/simple_queue/new_queue/ffq_initialize_next_page",
+			queueSize:             5,
+			maxPages:              3,
+			enqueNum:              5,
+			beforeDequeueNum:      3,
+			expectHeadGlobalIndex: 0,
+			expectCurrentPage:     1,
+			encoder:               json.Marshal,
+			decoder:               json.Unmarshal,
+			afterRemove:           true,
+		},
+		{
+			name:                  "file rotate",
+			fileDir:               "testdata/simple_queue/new_queue/ffq_initialize_file_rotate",
+			queueSize:             5,
+			maxPages:              3,
+			enqueNum:              7,
+			beforeDequeueNum:      3,
+			expectHeadGlobalIndex: 2,
+			expectCurrentPage:     1,
+			encoder:               json.Marshal,
+			decoder:               json.Unmarshal,
+			afterRemove:           true,
+		},
+		{
+			name:                  "equal max page",
+			fileDir:               "testdata/simple_queue/new_queue/ffq_initialize_equal_max_page",
+			queueSize:             5,
+			maxPages:              3,
+			enqueNum:              15,
+			beforeDequeueNum:      13,
+			expectHeadGlobalIndex: 0,
+			expectCurrentPage:     0,
+			encoder:               json.Marshal,
+			decoder:               json.Unmarshal,
+			afterRemove:           true,
+		},
+		{
+			name:                  "over max page",
+			fileDir:               "testdata/simple_queue/new_queue/ffq_initialize_over_max_page",
+			queueSize:             5,
+			maxPages:              3,
+			enqueNum:              16,
+			beforeDequeueNum:      13,
+			expectHeadGlobalIndex: 1,
+			expectCurrentPage:     0,
+			encoder:               json.Marshal,
+			decoder:               json.Unmarshal,
+			afterRemove:           true,
+		},
+	}
+
+	type Data struct {
+		Value int
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.afterRemove {
+				defer os.RemoveAll(tt.fileDir)
+			}
+			bq, _ := NewQueue[Data]("testQueue",
+				WithFileDir(tt.fileDir),
+				WithQueueSize(tt.queueSize),
+				WithMaxPages(tt.maxPages),
+				WithEncoder(tt.encoder),
+				WithDecoder(tt.decoder),
+			)
+
+			// prepare data
+			bq.WaitInitialize()
+
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				for i := 0; i < tt.enqueNum; i++ {
+					bq.Enqueue(&Data{Value: i})
+				}
+				bq.CloseQueue()
+				wg.Done()
+			}()
+
+			for j := 0; j < tt.beforeDequeueNum; j++ {
+				m, _ := bq.Dequeue()
+				bq.UpdateIndex(m)
+			}
+			bq.CloseIndex()
+			wg.Wait()
+			aq, _ := NewQueue[Data]("testQueue",
+				WithFileDir(tt.fileDir),
+				WithQueueSize(tt.queueSize),
+				WithMaxPages(tt.maxPages),
+				WithEncoder(tt.encoder),
+				WithDecoder(tt.decoder),
+			)
+			for j := tt.beforeDequeueNum; j < tt.enqueNum; j++ {
+				m, _ := aq.Dequeue()
+				if m.Data().Value != j {
+					t.Errorf("Failed test: data, expect: %d, actual: %d", j, m.Data().Value)
+				}
+				gi, li := m.Index()
+				if gi != j%tt.queueSize {
+					t.Errorf("Failed test: globalIndex, expect: %d, actual: %d", j%tt.queueSize, gi)
+				}
+				if li != 0 {
+					t.Errorf("Failed test: localIndex, expect: 0, actual: %d", li)
+				}
+				aq.UpdateIndex(m)
+			}
+			aq.WaitInitialize()
+			if aq.currentPage != tt.expectCurrentPage {
+				t.Errorf("Failed test: page, expect: %d, actual: %d", tt.expectCurrentPage, aq.currentPage)
+			}
+			if aq.headGlobalIndex != tt.expectHeadGlobalIndex {
+				t.Errorf("Failed test: globalIndex, expect: %d, actual: %d", tt.expectHeadGlobalIndex, aq.headGlobalIndex)
+			}
+		})
+	}
+}
+
+func TestNewQueue_initialize_bulk_enqueue(t *testing.T) {
+	bulkSize := 3
+	tests := []struct {
+		name                  string
+		fileDir               string
+		queueSize             int
+		maxPages              int
+		enqueNum              int
+		beforeDequeueNum      int
+		expectHeadGlobalIndex int
+		expectCurrentPage     int
+		encoder               func(v any) ([]byte, error)
+		decoder               func(data []byte, v any) error
+		afterRemove           bool
+	}{
+		{
+			name:                  "restart",
+			fileDir:               "testdata/simple_queue/new_queue/ffq_nitialize_bulk_restart",
+			queueSize:             5,
+			maxPages:              3,
+			enqueNum:              4,
+			beforeDequeueNum:      (3 * bulkSize) - 2,
+			expectHeadGlobalIndex: 4,
+			expectCurrentPage:     0,
+			encoder:               json.Marshal,
+			decoder:               json.Unmarshal,
+			afterRemove:           true,
+		},
+		{
+			name:                  "next page",
+			fileDir:               "testdata/simple_queue/new_queue/ffq_nitialize_bulk_next_page",
+			queueSize:             5,
+			maxPages:              3,
+			enqueNum:              5,
+			beforeDequeueNum:      (4 * bulkSize) - 2,
+			expectHeadGlobalIndex: 0,
+			expectCurrentPage:     1,
+			encoder:               json.Marshal,
+			decoder:               json.Unmarshal,
+			afterRemove:           true,
+		},
+		{
+			name:                  "file rotate",
+			fileDir:               "testdata/simple_queue/new_queue/ffq_initialize_bulk_file_rotate",
+			queueSize:             5,
+			maxPages:              3,
+			enqueNum:              7,
+			beforeDequeueNum:      (6 * bulkSize) - 2,
+			expectHeadGlobalIndex: 2,
+			expectCurrentPage:     1,
+			encoder:               json.Marshal,
+			decoder:               json.Unmarshal,
+			afterRemove:           true,
+		},
+		{
+			name:                  "equal max page",
+			fileDir:               "testdata/simple_queue/new_queue/ffq_nitialize_bulk_equal_max_page",
+			queueSize:             5,
+			maxPages:              3,
+			enqueNum:              15,
+			beforeDequeueNum:      (14 * bulkSize) - 2,
+			expectHeadGlobalIndex: 0,
+			expectCurrentPage:     0,
+			encoder:               json.Marshal,
+			decoder:               json.Unmarshal,
+			afterRemove:           true,
+		},
+		{
+			name:                  "over max page",
+			fileDir:               "testdata/simple_queue/new_queue/ffq_nitialize_bulk_over_max_page",
+			queueSize:             5,
+			maxPages:              3,
+			enqueNum:              16,
+			beforeDequeueNum:      (15 * bulkSize) - 2,
+			expectHeadGlobalIndex: 1,
+			expectCurrentPage:     0,
+			encoder:               json.Marshal,
+			decoder:               json.Unmarshal,
+			afterRemove:           true,
+		},
+	}
+
+	type Data struct {
+		Value int
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.afterRemove {
+				defer os.RemoveAll(tt.fileDir)
+			}
+			bq, _ := NewQueue[Data]("testQueue",
+				WithFileDir(tt.fileDir),
+				WithQueueSize(tt.queueSize),
+				WithMaxPages(tt.maxPages),
+				WithEncoder(tt.encoder),
+				WithDecoder(tt.decoder),
+			)
+
+			// prepare data
+			bq.WaitInitialize()
+
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				v := 0
+				for i := 0; i < tt.enqueNum; i++ {
+					data := make([]*Data, 0, bulkSize)
+					for k := 0; k < bulkSize; k++ {
+						data = append(data, &Data{Value: v})
+						v++
+					}
+					bq.BulkEnqueue(data)
+				}
+				bq.CloseQueue()
+				wg.Done()
+			}()
+
+			for j := 0; j < tt.beforeDequeueNum; j++ {
+				m, _ := bq.Dequeue()
+				bq.UpdateIndex(m)
+			}
+			bq.CloseIndex()
+			wg.Wait()
+			aq, _ := NewQueue[Data]("testQueue",
+				WithFileDir(tt.fileDir),
+				WithQueueSize(tt.queueSize),
+				WithMaxPages(tt.maxPages),
+				WithEncoder(tt.encoder),
+				WithDecoder(tt.decoder),
+			)
+			for j := tt.beforeDequeueNum; j < tt.enqueNum*bulkSize; j++ {
+				m, _ := aq.Dequeue()
+				if m.Data().Value != j {
+					t.Errorf("Failed test: data, expect: %d, actual: %d", j, m.Data().Value)
+				}
+				gi, li := m.Index()
+				if gi != j/bulkSize%tt.queueSize {
+					t.Errorf("Failed test: globalIndex, expect: %d, actual: %d", j/bulkSize%tt.queueSize, gi)
+				}
+				if li != j%bulkSize {
+					t.Errorf("Failed test: localIndex, expect: %d, actual: %d", j%bulkSize, li)
+				}
+				aq.UpdateIndex(m)
+			}
+			aq.WaitInitialize()
+			if aq.currentPage != tt.expectCurrentPage {
+				t.Errorf("Failed test: page, expect: %d, actual: %d", tt.expectCurrentPage, aq.currentPage)
+			}
+			if aq.headGlobalIndex != tt.expectHeadGlobalIndex {
+				t.Errorf("Failed test: globalIndex, expect: %d, actual: %d", tt.expectHeadGlobalIndex, aq.headGlobalIndex)
 			}
 		})
 	}
@@ -151,21 +431,17 @@ func TestQEnqueueDequeue(t *testing.T) {
 			defer os.RemoveAll(dir)
 
 			queueSize := 5
-			enqueueWriteSize := 2
-			pageSize := 2
-			dataFixedLength := uint64(1)
-			jsonEncoder := json.Marshal
-			jsonDecoder := json.Unmarshal
+			maxPages := 2
+			encoder := json.Marshal
+			decoder := json.Unmarshal
 
 			q, err := NewQueue[Data](
 				"testQueue",
 				WithFileDir(dir),
 				WithQueueSize(queueSize),
-				WithEnqueueWriteSize(enqueueWriteSize),
-				WithPageSize(pageSize),
-				WithDataFixedLength(dataFixedLength),
-				WithJSONEncoder(jsonEncoder),
-				WithJSONDecoder(jsonDecoder),
+				WithMaxPages(maxPages),
+				WithEncoder(encoder),
+				WithDecoder(decoder),
 			)
 
 			q.WaitInitialize()
@@ -193,8 +469,12 @@ func TestQEnqueueDequeue(t *testing.T) {
 			wg.Add(1)
 			go func(wg *sync.WaitGroup) {
 				defer wg.Done()
-				for i := 0; i < len(tt.expectedDequeue); i++ {
+				i := 0
+				for {
 					message, err := q.Dequeue()
+					if IsErrQueueClose(err) {
+						break
+					}
 					if err != nil {
 						t.Errorf("dequeue failed: %v", err)
 					} else if tt.expectedDequeue[i].Value != message.Data().Value {
@@ -202,6 +482,7 @@ func TestQEnqueueDequeue(t *testing.T) {
 					}
 					message.Index()
 					q.UpdateIndex(message)
+					i++
 				}
 				err = q.CloseIndex()
 				if err != nil {
@@ -271,21 +552,17 @@ func TestQEnqueueDequeueWithFunc(t *testing.T) {
 			defer os.RemoveAll(dir)
 
 			queueSize := 5
-			enqueueWriteSize := 2
-			pageSize := 2
-			dataFixedLength := uint64(1)
-			jsonEncoder := json.Marshal
-			jsonDecoder := json.Unmarshal
+			maxPages := 2
+			encoder := json.Marshal
+			decoder := json.Unmarshal
 
 			q, err := NewQueue[Data](
 				"testQueue",
 				WithFileDir(dir),
 				WithQueueSize(queueSize),
-				WithEnqueueWriteSize(enqueueWriteSize),
-				WithPageSize(pageSize),
-				WithDataFixedLength(dataFixedLength),
-				WithJSONEncoder(jsonEncoder),
-				WithJSONDecoder(jsonDecoder),
+				WithMaxPages(maxPages),
+				WithEncoder(encoder),
+				WithDecoder(decoder),
 			)
 
 			q.WaitInitialize()
@@ -313,11 +590,16 @@ func TestQEnqueueDequeueWithFunc(t *testing.T) {
 			wg.Add(1)
 			go func(wg *sync.WaitGroup) {
 				defer wg.Done()
-				for i := 0; i < len(tt.expectedDequeue); i++ {
+				i := 0
+				for {
 					err := q.FuncAfterDequeue(f)
+					if IsErrQueueClose(err) {
+						break
+					}
 					if err != nil {
 						t.Errorf("dequeue failed: %v", err)
 					}
+					i++
 				}
 				err = q.CloseIndex()
 				if err != nil {
@@ -388,21 +670,17 @@ func TestQBulkEnqueueDequeue(t *testing.T) {
 			defer os.RemoveAll(dir)
 
 			queueSize := 5
-			enqueueWriteSize := 2
-			pageSize := 2
-			dataFixedLength := uint64(1)
-			jsonEncoder := json.Marshal
-			jsonDecoder := json.Unmarshal
+			maxPages := 2
+			encoder := json.Marshal
+			decoder := json.Unmarshal
 
 			q, err := NewQueue[Data](
 				"testQueue",
 				WithFileDir(dir),
 				WithQueueSize(queueSize),
-				WithEnqueueWriteSize(enqueueWriteSize),
-				WithPageSize(pageSize),
-				WithDataFixedLength(dataFixedLength),
-				WithJSONEncoder(jsonEncoder),
-				WithJSONDecoder(jsonDecoder),
+				WithMaxPages(maxPages),
+				WithEncoder(encoder),
+				WithDecoder(decoder),
 			)
 
 			q.WaitInitialize()
@@ -429,15 +707,16 @@ func TestQBulkEnqueueDequeue(t *testing.T) {
 			go func(wg *sync.WaitGroup) {
 				defer wg.Done()
 				i := 0
-				for i < len(tt.expectedDequeue) {
+				for {
 					messages, err := q.BulkDequeue(tt.bulkSize, tt.lazy)
+					fmt.Println(err)
 					if err != nil {
 						if IsErrQueueClose(err) {
 							err = q.CloseIndex()
 							if err != nil {
 								t.Errorf("Failed to close index: %v", err)
 							}
-							return
+							break
 						}
 						t.Errorf("dequeue failed: %v", err)
 					} else if len(messages) > 0 {
@@ -449,6 +728,11 @@ func TestQBulkEnqueueDequeue(t *testing.T) {
 							i++
 						}
 					}
+				}
+				// next confirm bulkdequeue
+				_, err := q.BulkDequeue(tt.bulkSize, tt.lazy)
+				if !IsErrQueueClose(err) {
+					t.Errorf("Failed test: error, %v", err)
 				}
 			}(&wg)
 
@@ -518,21 +802,17 @@ func TestQBulkEnqueueDequeueWithFunc(t *testing.T) {
 			defer os.RemoveAll(dir)
 
 			queueSize := 5
-			enqueueWriteSize := 2
-			pageSize := 2
-			dataFixedLength := uint64(1)
-			jsonEncoder := json.Marshal
-			jsonDecoder := json.Unmarshal
+			maxPages := 2
+			encoder := json.Marshal
+			decoder := json.Unmarshal
 
 			q, err := NewQueue[Data](
 				"testQueue",
 				WithFileDir(dir),
 				WithQueueSize(queueSize),
-				WithEnqueueWriteSize(enqueueWriteSize),
-				WithPageSize(pageSize),
-				WithDataFixedLength(dataFixedLength),
-				WithJSONEncoder(jsonEncoder),
-				WithJSONDecoder(jsonDecoder),
+				WithMaxPages(maxPages),
+				WithEncoder(encoder),
+				WithDecoder(decoder),
 			)
 
 			q.WaitInitialize()
@@ -566,10 +846,15 @@ func TestQBulkEnqueueDequeueWithFunc(t *testing.T) {
 							if err != nil {
 								t.Errorf("Failed to close index: %v", err)
 							}
-							return
+							break
 						}
 						t.Errorf("dequeue failed: %v", err)
 					}
+				}
+				// next confirm bulkdequeue
+				err := q.FuncAfterBulkDequeue(tt.bulkSize, tt.lazy, f)
+				if !IsErrQueueClose(err) {
+					t.Errorf("Failed test: error, %v", err)
 				}
 			}(&wg)
 
@@ -593,21 +878,17 @@ func TestQLength(t *testing.T) {
 	defer os.RemoveAll(dir)
 
 	queueSize := 5
-	enqueueWriteSize := 2
-	pageSize := 2
-	dataFixedLength := uint64(1)
-	jsonEncoder := json.Marshal
-	jsonDecoder := json.Unmarshal
+	maxPages := 2
+	encoder := json.Marshal
+	decoder := json.Unmarshal
 
 	q, err := NewQueue[Data](
 		"testQueue",
 		WithFileDir(dir),
 		WithQueueSize(queueSize),
-		WithEnqueueWriteSize(enqueueWriteSize),
-		WithPageSize(pageSize),
-		WithDataFixedLength(dataFixedLength),
-		WithJSONEncoder(jsonEncoder),
-		WithJSONDecoder(jsonDecoder),
+		WithMaxPages(maxPages),
+		WithEncoder(encoder),
+		WithDecoder(decoder),
 	)
 
 	q.WaitInitialize()
