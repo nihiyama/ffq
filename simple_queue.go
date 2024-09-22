@@ -28,9 +28,7 @@ var (
 //   - name: The name of the queue.
 //   - fileDir: The directory where the queue files are stored.
 //   - queueSize: The maximum number of items that can be held in the queue.
-//   - enqueueWriteSize: The number of items to write to disk in each batch.
 //   - maxPages: The number of files used in a single rotation cycle.
-//   - dataFixedLength: The fixed size of the data block written to each file.
 //   - maxFileSize: The maximum size of a single queue file.
 //   - maxIndexSize: The maximum size of the index file.
 //   - queue: The in-memory queue channel that holds the messages.
@@ -123,8 +121,6 @@ func NewQueue[T any](name string, opts ...Option) (*Queue[T], error) {
 	if err != nil {
 		return nil, err
 	}
-	headGlobalIndex := tailGlobalIndex + 1
-	headLocalIndex := tailLocalIndex + 1
 
 	indexFile, err := openIndexFile(indexFilePath)
 	if err != nil {
@@ -142,7 +138,6 @@ func NewQueue[T any](name string, opts ...Option) (*Queue[T], error) {
 		maxPages:        maxPages,
 		currentPage:     currentPage,
 		queue:           queue,
-		headGlobalIndex: headGlobalIndex,
 		indexFile:       indexFile,
 		encoder:         encoder,
 		decoder:         decoder,
@@ -152,7 +147,7 @@ func NewQueue[T any](name string, opts ...Option) (*Queue[T], error) {
 	}
 
 	go func() {
-		q.initialize(headLocalIndex)
+		q.initialize(tailGlobalIndex, tailLocalIndex)
 	}()
 
 	return &q, nil
@@ -501,7 +496,7 @@ func (q *Queue[T]) writeIndex(page int, globalIndex int, localIndex int) error {
 	return nil
 }
 
-// Lengt1 returns the current length of the queue.
+// Length returns the current length of the queue.
 //
 // Returns:
 //   - int: The number of items currently in the queue.
@@ -514,8 +509,9 @@ func (q *Queue[T]) Length() int {
 	return len(q.queue)
 }
 
-func (q *Queue[T]) initialize(localIndex int) {
+func (q *Queue[T]) initialize(tailGlobalIndex int, tailLocalIndex int) {
 	var queueFile *os.File
+	isLast := true
 
 	for {
 		queueFilepath := filepath.Join(q.fileDir, fmt.Sprintf("%s.%d", queueFilename, q.currentPage))
@@ -544,8 +540,8 @@ func (q *Queue[T]) initialize(localIndex int) {
 
 		i := 0
 		for scanner.Scan() {
-			i++
-			if i <= q.headGlobalIndex {
+			if i < tailGlobalIndex {
+				i++
 				continue
 			}
 			b := scanner.Bytes()
@@ -554,16 +550,22 @@ func (q *Queue[T]) initialize(localIndex int) {
 			if err != nil {
 				panic(fmt.Sprintf("could not UnMarshal data, %s, %v", string(b), err))
 			}
-			for j := localIndex; j < len(data); j++ {
+			for j := tailLocalIndex; j < len(data); j++ {
+				if isLast {
+					isLast = false
+					continue
+				}
 				q.queue <- &Message[T]{
 					name:        q.name,
-					globalIndex: q.headGlobalIndex,
+					globalIndex: tailGlobalIndex,
 					localIndex:  j,
 					data:        data[j],
 				}
 			}
-			localIndex = 0
-			q.headGlobalIndex++
+			tailLocalIndex = 0
+			i++
+			tailGlobalIndex++
+			q.headGlobalIndex = tailGlobalIndex
 		}
 
 		if err := scanner.Err(); err != nil {
@@ -572,6 +574,8 @@ func (q *Queue[T]) initialize(localIndex int) {
 
 		nextPage := q.currentPage
 		if q.headGlobalIndex == q.queueSize {
+			tailGlobalIndex = 0
+			q.headGlobalIndex = tailGlobalIndex
 			nextPage = q.currentPage + 1
 			if nextPage == q.maxPages {
 				nextPage = 0
@@ -579,16 +583,18 @@ func (q *Queue[T]) initialize(localIndex int) {
 		}
 
 		if nextPage != q.currentPage {
-			nextQueueFilepath := filepath.Join(q.fileDir, fmt.Sprintf("%s.%d", queueFilename, q.currentPage))
+			nextQueueFilepath := filepath.Join(q.fileDir, fmt.Sprintf("%s.%d", queueFilename, nextPage))
 			nextStat, err := os.Stat(nextQueueFilepath)
 			if err != nil {
 				if !os.IsNotExist(err) {
 					panic(err)
 				}
+			} else {
+				if stat.ModTime().After(nextStat.ModTime()) {
+					os.Remove(nextQueueFilepath)
+				}
 			}
-			if stat.ModTime().After(nextStat.ModTime()) {
-				os.Remove(nextQueueFilepath)
-			}
+			q.currentPage = nextPage
 		} else {
 			break
 		}

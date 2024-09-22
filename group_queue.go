@@ -19,10 +19,7 @@ import (
 //   - name: The name of the group queue.
 //   - fileDir: The directory where the queue files are stored.
 //   - queueSize: The maximum number of items that can be held in each queue.
-//   - enqueueWriteSize: The number of items to write to disk in each batch.
-//   - maxPages: The number of files used in a single rotation cycle.
-//   - dataFixedLength: The fixed size of the data block written to each file.
-//   - maxFileSize: The maximum size of a single queue file.
+//   - maxPages: The number of files used in a single rotation cycle.//   - maxFileSize: The maximum size of a single queue file.
 //   - maxIndexSize: The maximum size of the index file.
 //   - initializeBlock: A channel to block until initialization is complete.
 //   - queues: A map of queue names to their respective Queue instances.
@@ -163,11 +160,13 @@ func (gq *GroupQueue[T]) addQueue(name string) error {
 	if err != nil {
 		return err
 	}
-	// TODO: if large size data, send queueSig
 	gq.mu.Lock()
 	gq.queues[name] = q
 	gq.mu.Unlock()
 	q.WaitInitialize()
+	if q.Length() > 0 {
+		gq.sendSignal()
+	}
 	return nil
 }
 
@@ -612,6 +611,7 @@ func (gq *GroupQueue[T]) initialize() {
 	}
 
 	var wg sync.WaitGroup
+	fmt.Println(gq.fileDir, entries)
 
 	for _, entry := range entries {
 		if entry.IsDir() {

@@ -31,11 +31,11 @@ func openIndexFile(indexFilepath string) (*os.File, error) {
 func readIndex(indexFilepath string) (int, int, int, error) {
 	var err error
 	if _, err := os.Stat(indexFilepath); os.IsNotExist(err) {
-		return 0, -1, -1, nil
+		return 0, 0, 0, nil
 	}
 	indexFile, err := os.Open(indexFilepath)
 	if err != nil {
-		return 0, -1, -1, err
+		return 0, 0, 0, err
 	}
 	defer indexFile.Close()
 
@@ -46,15 +46,15 @@ func readIndex(indexFilepath string) (int, int, int, error) {
 	var localIndex uint32
 	err = binary.Read(indexFile, binary.LittleEndian, &page)
 	if err != nil {
-		return 0, -1, -1, err
+		return 0, 0, 0, err
 	}
 	err = binary.Read(indexFile, binary.LittleEndian, &globalIndex)
 	if err != nil {
-		return int(page), -1, -1, err
+		return int(page), 0, 0, err
 	}
 	err = binary.Read(indexFile, binary.LittleEndian, &localIndex)
 	if err != nil {
-		return int(page), int(globalIndex), -1, err
+		return int(page), int(globalIndex), 0, err
 	}
 
 	return int(page), int(globalIndex), int(localIndex), nil

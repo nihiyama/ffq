@@ -28,8 +28,8 @@ func (m *Message[T]) Name() string {
 //
 //	message := Message[string]{index: 1, data: &"exampleData"}
 //	fmt.Println("Message index:", message.Index())
-func (m *Message[T]) Index() int {
-	return int(m.globalIndex)
+func (m *Message[T]) Index() (int, int) {
+	return m.globalIndex, m.localIndex
 }
 
 // Data returns the data associated with the message.
