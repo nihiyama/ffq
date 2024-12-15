@@ -104,7 +104,7 @@ func main() {
             if err != nil {
                 if ffq.IsErrQueueClose(err) {
                     // if qeueu is closed, close index and finish goroutine
-                    q.CloseIndex()
+                    gq.CloseIndex()
                     return
                 }
                 // catch serious error
@@ -113,7 +113,7 @@ func main() {
             for ms := range msc {
                 if len(ms) > 0 {
                     // update index
-                    q.UpdateIndex(ms[len(ms)-1])
+                    gq.UpdateIndex(ms[len(ms)-1])
                 }
             }
         }
@@ -122,7 +122,7 @@ func main() {
     // Initialization is performed after starting the dequeue goroutine 
     // and before starting the enqueue goroutine.
     // This ensures that data that has not yet been dequeued can be safely dequeued.
-    q.WaitInitialize()
+    gq.WaitInitialize()
 
     // startup enqueue goroutine 1.
     wg.Add(1)
@@ -135,7 +135,7 @@ func main() {
         gq.BulkEnqueue("q1", data)
 
         // finally, queueu is closed
-        q.CloseQueue()
+        gq.CloseQueue()
     }(&wg)
 
     // startup enqueue goroutine 2.
@@ -149,7 +149,7 @@ func main() {
         gq.BulkEnqueue("q2", data)
 
         // finally, queueu is closed
-        q.CloseQueue()
+        gq.CloseQueue()
     }(&wg)
 
     wg.Wait()
