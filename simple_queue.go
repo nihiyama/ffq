@@ -20,57 +20,40 @@ var (
 	queueFilename = "queue"
 )
 
-// Queue represents a file-based FIFO queue with generic type T.
-// It manages the queue data in files and provides methods for enqueueing, dequeueing, and
-// handling data in a type-safe manner.
-//
-// Fields:
-//   - name: The name of the queue.
-//   - fileDir: The directory where the queue files are stored.
-//   - queueSize: The maximum number of items that can be held in the queue.
-//   - maxPages: The number of files used in a single rotation cycle.
-//   - maxFileSize: The maximum size of a single queue file.
-//   - maxIndexSize: The maximum size of the index file.
-//   - queue: The in-memory queue channel that holds the messages.
-//   - headGlobalIndex: The current index of the head of the queue.
-//   - currentPage: The current page (file) being written to.
-//   - queueFile: The file currently being written to.
-//   - indexFile: The file storing the index of the queue.
-//   - encoder: A function to encode data to JSON.
-//   - decoder: A function to decode data from JSON.
-//   - initializeBlock: A channel to block until initialization is complete.
+// Queue represents a file-based FIFO queue with a generic type T.
+// It supports operations such as enqueue, dequeue, bulk enqueue/dequeue, and manages the queue across multiple pages.
 type Queue[T any] struct {
-	queueSize       int
-	maxPages        int
-	currentPage     int
-	headGlobalIndex int
-	name            string
-	fileDir         string
-	queue           chan *Message[T]
-	queueFile       *os.File
-	indexFile       *os.File
-	encoder         func(v any) ([]byte, error)
-	decoder         func(data []byte, v any) error
-	initializeBlock chan struct{}
-	qMu             *sync.Mutex
-	iMu             *sync.Mutex
+	queueSize       int                            // The maximum number of items in the queue.
+	maxPages        int                            // The maximum number of pages allowed for the queue.
+	currentPage     int                            // The current page being written to.
+	headGlobalIndex int                            // The global index of the head of the queue.
+	name            string                         // The name of the queue.
+	fileDir         string                         // The directory where the queue files are stored.
+	queue           chan *Message[T]               // The queue channel for holding messages.
+	queueFile       *os.File                       // The file where the queue data is written.
+	indexFile       *os.File                       // The file where the queue's index is stored.
+	encoder         func(v any) ([]byte, error)    // Function to encode data before writing to the queue.
+	decoder         func(data []byte, v any) error // Function to decode data when reading from the queue.
+	initializeBlock chan struct{}                  // A channel to block until the queue is fully initialized.
+	qMu             *sync.Mutex                    // A mutex for queue operations.
+	iMu             *sync.Mutex                    // A mutex for index operations.
 }
 
-// NewQueue creates a new file-based FIFO queue.
+// NewQueue creates a new Queue with the given name and options.
 //
 // Parameters:
 //   - name: The name of the queue.
-//   - opts: A variadic list of options to customize the queue settings.
+//   - opts: A list of options to customize the queue (e.g., queue size, max pages, file directory).
 //
 // Returns:
-//   - *Queue[T]: A pointer to the newly created queue instance.
-//   - error: An error if the queue could not be created.
+//   - *Queue: A pointer to the newly created Queue.
+//   - error: An error if the queue initialization fails.
 //
 // Example:
 //
-//	queue, err := NewQueue[Data]("myQueue")
+//	q, err := NewQueue[string]("myQueue", WithQueueSize(100), WithMaxPages(5))
 //	if err != nil {
-//	  log.Fatal(err)
+//	    log.Fatal(err)
 //	}
 func NewQueue[T any](name string, opts ...Option) (*Queue[T], error) {
 	var err error
@@ -156,17 +139,17 @@ func NewQueue[T any](name string, opts ...Option) (*Queue[T], error) {
 // Enqueue adds a single item to the queue.
 //
 // Parameters:
-//   - data: A pointer to the item to be added to the queue.
+//   - data: The data to be added to the queue.
 //
 // Returns:
-//   - error: An error if the item could not be added to the queue.
+//   - error: An error if the enqueue operation fails.
 //
 // Example:
 //
 //	data := Data{...}
-//	err := queue.Enqueue(&data)
+//	err := q.Enqueue(&dataItem)
 //	if err != nil {
-//	  log.Fatal(err)
+//		log.Fatal(err)
 //	}
 func (q *Queue[T]) Enqueue(data *T) error {
 	q.qMu.Lock()
@@ -200,17 +183,17 @@ func (q *Queue[T]) Enqueue(data *T) error {
 // BulkEnqueue adds multiple items to the queue in a single operation.
 //
 // Parameters:
-//   - data: A slice of pointers to the items to be added to the queue.
+//   - data: A slice of data items to be added to the queue.
 //
 // Returns:
-//   - error: An error if the items could not be added to the queue.
+//   - error: An error if the bulk enqueue operation fails.
 //
 // Example:
 //
 //	data := []*Data{{...},{...},...}
-//	err := queue.BulkEnqueue(data)
+//	err := q.BulkEnqueue(data)
 //	if err != nil {
-//		log.Fatal(err)
+//	    log.Fatal(err)
 //	}
 func (q *Queue[T]) BulkEnqueue(data []*T) error {
 	q.qMu.Lock()
@@ -242,18 +225,19 @@ func (q *Queue[T]) BulkEnqueue(data []*T) error {
 	return nil
 }
 
-// Dequeue removes and returns a single item from the queue.
+// Dequeue retrieves and returns a single message from the queue.
 //
 // Returns:
-//   - *Message[T]: The dequeued item wrapped in a Message struct.
-//   - error: An error if the queue is closed or empty.
+//   - *Message[T]: The dequeued message.
+//   - error: An error if the dequeue operation fails or the queue is closed.
 //
 // Example:
 //
-//	message, err := queue.Dequeue()
+//	m, err := q.Dequeue()
 //	if err != nil {
-//	  log.Fatal(err)
+//	    log.Fatal(err)
 //	}
+//	fmt.Println("Dequeued message:", message)
 func (q *Queue[T]) Dequeue() (*Message[T], error) {
 	m, ok := <-q.queue
 	if !ok {
@@ -262,22 +246,23 @@ func (q *Queue[T]) Dequeue() (*Message[T], error) {
 	return m, nil
 }
 
-// BulkDequeue removes and returns multiple items from the queue, waiting up to a specified duration.
+// BulkDequeue retrieves multiple messages from the queue and returns them in a slice.
 //
 // Parameters:
-//   - size: The maximum number of items to dequeue.
-//   - lazy: The time to wait for more items before returning.
+//   - size: The maximum number of messages to dequeue in one operation.
+//   - lazy: A duration to wait between dequeue operations.
 //
 // Returns:
-//   - []*Message[T]: A slice of dequeued items wrapped in Message structs.
-//   - error: An error if the queue is closed or empty.
+//   - []*Message[T]: A slice of dequeued messages.
+//   - error: An error if the bulk dequeue operation fails or the queue is closed.
 //
 // Example:
 //
-//	messages, err := queue.BulkDequeue(10, 500)
+//	ms, err := q.BulkDequeue(10, 100*time.Millisecond)
 //	if err != nil {
-//	  log.Fatal(err)
+//	    log.Fatal(err)
 //	}
+//	fmt.Println("Bulk dequeued messages:", ms)
 func (q *Queue[T]) BulkDequeue(size int, lazy time.Duration) ([]*Message[T], error) {
 	messages := make([]*Message[T], 0, size)
 	m, ok := <-q.queue
@@ -302,22 +287,22 @@ func (q *Queue[T]) BulkDequeue(size int, lazy time.Duration) ([]*Message[T], err
 	}
 }
 
-// FuncAfterDequeue applies a function to the data of a dequeued item and updates the index.
+// FuncAfterDequeue applies a given function to the data of a dequeued item.
 //
 // Parameters:
-//   - f: A function that takes a pointer to the dequeued data and returns an error.
+//   - f: A function that processes the dequeued item.
 //
 // Returns:
-//   - error: An error if the function or index update fails.
+//   - error: An error if the dequeue or function application fails.
 //
 // Example:
 //
-//	err := queue.FuncAfterDequeue(func(data Data) error {
-//	  fmt.Println(*data)
-//	  return nil
+//	err := q.FuncAfterDequeue(func(data *T) error {
+//	    fmt.Println("Processing item:", data)
+//	    return nil
 //	})
 //	if err != nil {
-//	  log.Fatal(err)
+//	    log.Fatal(err)
 //	}
 func (q *Queue[T]) FuncAfterDequeue(f func(*T) error) error {
 	var err error
@@ -339,26 +324,24 @@ func (q *Queue[T]) FuncAfterDequeue(f func(*T) error) error {
 	return nil
 }
 
-// FuncAfterBulkDequeue applies a function to the data of multiple dequeued items and updates the index.
+// FuncAfterBulkDequeue applies a given function to multiple dequeued items in a batch.
 //
 // Parameters:
-//   - size: The maximum number of items to dequeue.
-//   - lazy: The time to wait for more items before applying the function.
-//   - f: A function that takes a slice of pointers to the dequeued data and returns an error.
+//   - size: The maximum number of items to dequeue in one batch.
+//   - lazy: A duration to wait between dequeue operations.
+//   - f: A function that processes the batch of dequeued items.
 //
 // Returns:
-//   - error: An error if the function or index update fails.
+//   - error: An error if the bulk dequeue or function application fails.
 //
 // Example:
 //
-//	err := queue.FuncAfterBulkDequeue(10, 500, func(data []*Data) error {
-//	  for _, d := range data {
-//	    fmt.Println(*d)
-//	  }
-//	  return nil
+//	err := q.FuncAfterBulkDequeue(10, 100*time.Millisecond, func(data []*T) error {
+//	    fmt.Println("Processing batch:", data)
+//	    return nil
 //	})
 //	if err != nil {
-//	  log.Fatal(err)
+//	    log.Fatal(err)
 //	}
 func (q *Queue[T]) FuncAfterBulkDequeue(size int, lazy time.Duration, f func([]*T) error) error {
 	var err error
@@ -407,10 +390,9 @@ func (q *Queue[T]) writeQueue(b []byte) error {
 	var err error
 
 	buf := queueBufPool.Get().(*bytes.Buffer)
-	defer queueBufPool.Put(buf)
-
 	buf.Reset()
 	buf.Grow(len(b) + 1)
+	defer queueBufPool.Put(buf)
 
 	_, err = buf.Write(b)
 	if err != nil {
@@ -452,19 +434,19 @@ func (q *Queue[T]) rotateFile() error {
 	return nil
 }
 
-// UpdateIndex updates the index file with the provided message's index.
+// UpdateIndex updates the index of a given message in the queue.
 //
 // Parameters:
-//   - message: The message containing the index to be written to the index file.
+//   - message: The message whose index needs to be updated.
 //
 // Returns:
-//   - error: An error if the index could not be updated.
+//   - error: An error if the index update fails.
 //
 // Example:
 //
-//	err := queue.UpdateIndex(message)
+//	err := q.UpdateIndex(message)
 //	if err != nil {
-//	  log.Fatal(err)
+//	    log.Fatal(err)
 //	}
 func (q *Queue[T]) UpdateIndex(message *Message[T]) error {
 	return q.writeIndex(message.page, message.globalIndex, message.localIndex)
@@ -481,13 +463,14 @@ func (q *Queue[T]) writeIndex(page int, globalIndex int, localIndex int) error {
 	}
 
 	buf := indexBufPool.Get().(*[12]byte)
-	defer indexBufPool.Put(buf)
 
 	// uint32 size is 4
 	// | -- page(4) -- | -- globalIndex(4) -- |-- localIndex(4) -- |
 	binary.LittleEndian.PutUint32((*buf)[0:4], uint32(page))
 	binary.LittleEndian.PutUint32((*buf)[4:8], uint32(globalIndex))
 	binary.LittleEndian.PutUint32((*buf)[8:12], uint32(localIndex))
+
+	defer indexBufPool.Put(buf)
 
 	_, err = q.indexFile.Write((*buf)[:])
 	if err != nil {
@@ -496,14 +479,14 @@ func (q *Queue[T]) writeIndex(page int, globalIndex int, localIndex int) error {
 	return nil
 }
 
-// Length returns the current length of the queue.
+// Length returns the current number of items in the queue.
 //
 // Returns:
-//   - int: The number of items currently in the queue.
+//   - int: The number of items in the queue.
 //
 // Example:
 //
-//	length := queue.Length()
+//	length := q.Length()
 //	fmt.Println("Queue length:", length)
 func (q *Queue[T]) Length() int {
 	return len(q.queue)
@@ -605,31 +588,31 @@ func (q *Queue[T]) initialize(tailGlobalIndex int, tailLocalIndex int) {
 	close(q.initializeBlock)
 }
 
-// WaitInitialize blocks until the queue initialization is complete.
+// WaitInitialize blocks until the queue is fully initialized.
 //
 // Example:
 //
-//	queue.WaitInitialize()
-//	fmt.Println("Queue initialized")
+//	q.WaitInitialize()
 func (q *Queue[T]) WaitInitialize() {
 	<-q.initializeBlock
 }
 
-// CloseQueue closes the queue file and releases associated resources.
+// CloseQueue closes the queue and its associated file, signaling that no more data can be added.
 //
 // Returns:
-//   - error: An error if the queue file could not be closed.
+//   - error: An error if the file closure fails.
 //
 // Example:
 //
-//	err := queue.CloseQueue()
+//	err := q.CloseQueue()
 //	if err != nil {
-//	  log.Fatal(err)
+//	    log.Fatal(err)
 //	}
 func (q *Queue[T]) CloseQueue() error {
-	var err error
+	q.qMu.Lock()
+	defer q.qMu.Unlock()
 	close(q.queue)
-	err = q.queueFile.Close()
+	err := q.queueFile.Close()
 	if err != nil {
 		return err
 	}
@@ -648,6 +631,8 @@ func (q *Queue[T]) CloseQueue() error {
 //	  log.Fatal(err)
 //	}
 func (q *Queue[T]) CloseIndex() error {
+	q.iMu.Lock()
+	defer q.iMu.Unlock()
 	err := q.indexFile.Close()
 	if err != nil {
 		return err

@@ -2,7 +2,6 @@ package ffq
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -239,7 +238,7 @@ func TestNewQueue_initialize_bulk_enqueue(t *testing.T) {
 	}{
 		{
 			name:                  "restart",
-			fileDir:               "testdata/simple_queue/new_queue/ffq_nitialize_bulk_restart",
+			fileDir:               "testdata/simple_queue/new_queue/ffq_initialize_bulk_restart",
 			queueSize:             5,
 			maxPages:              3,
 			enqueNum:              4,
@@ -252,7 +251,7 @@ func TestNewQueue_initialize_bulk_enqueue(t *testing.T) {
 		},
 		{
 			name:                  "next page",
-			fileDir:               "testdata/simple_queue/new_queue/ffq_nitialize_bulk_next_page",
+			fileDir:               "testdata/simple_queue/new_queue/ffq_initialize_bulk_next_page",
 			queueSize:             5,
 			maxPages:              3,
 			enqueNum:              5,
@@ -278,7 +277,7 @@ func TestNewQueue_initialize_bulk_enqueue(t *testing.T) {
 		},
 		{
 			name:                  "equal max page",
-			fileDir:               "testdata/simple_queue/new_queue/ffq_nitialize_bulk_equal_max_page",
+			fileDir:               "testdata/simple_queue/new_queue/ffq_initialize_bulk_equal_max_page",
 			queueSize:             5,
 			maxPages:              3,
 			enqueNum:              15,
@@ -291,7 +290,7 @@ func TestNewQueue_initialize_bulk_enqueue(t *testing.T) {
 		},
 		{
 			name:                  "over max page",
-			fileDir:               "testdata/simple_queue/new_queue/ffq_nitialize_bulk_over_max_page",
+			fileDir:               "testdata/simple_queue/new_queue/ffq_initialize_bulk_over_max_page",
 			queueSize:             5,
 			maxPages:              3,
 			enqueNum:              16,
@@ -709,7 +708,6 @@ func TestQBulkEnqueueDequeue(t *testing.T) {
 				i := 0
 				for {
 					messages, err := q.BulkDequeue(tt.bulkSize, tt.lazy)
-					fmt.Println(err)
 					if err != nil {
 						if IsErrQueueClose(err) {
 							err = q.CloseIndex()
