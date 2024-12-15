@@ -29,7 +29,7 @@ type Option func(options *options) error
 //
 // Example:
 //
-//	queue, err := NewQueue("myQueue", WithFileDir("/tmp/myQueue"))
+//	q, err := NewQueue("myQueue", WithFileDir("/tmp/myQueue"))
 func WithFileDir(fileDir string) Option {
 	return func(options *options) error {
 		options.fileDir = &fileDir
@@ -48,7 +48,7 @@ func WithFileDir(fileDir string) Option {
 //
 // Example:
 //
-//	queue, err := NewQueue("myQueue", WithQueueSize(100))
+//	q, err := NewQueue("myQueue", WithQueueSize(100))
 func WithQueueSize(size int) Option {
 	return func(options *options) error {
 		if size < 1 {
@@ -71,7 +71,7 @@ func WithQueueSize(size int) Option {
 //
 // Example:
 //
-//	queue, err := NewQueue("myQueue", WithMaxPages(2))
+//	q, err := NewQueue("myQueue", WithMaxPages(2))
 func WithMaxPages(size int) Option {
 	return func(options *options) error {
 		if size < 2 {
@@ -93,7 +93,7 @@ func WithMaxPages(size int) Option {
 //
 // Example:
 //
-//	queue, err := NewQueue("myQueue", WithEncoder(sonic.Marshal))
+//	q, err := NewQueue("myQueue", WithEncoder(sonic.Marshal))
 func WithEncoder(encoder func(v any) ([]byte, error)) Option {
 	return func(options *options) error {
 		options.encoder = &encoder
@@ -111,7 +111,7 @@ func WithEncoder(encoder func(v any) ([]byte, error)) Option {
 //
 // Example:
 //
-//	queue, err := NewQueue("myQueue", WithDecoder(sonic.Unmarshal))
+//	q, err := NewQueue("myQueue", WithDecoder(sonic.Unmarshal))
 func WithDecoder(decoder func(data []byte, v any) error) Option {
 	return func(options *options) error {
 		options.decoder = &decoder

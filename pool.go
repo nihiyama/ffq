@@ -1,3 +1,4 @@
+// Package ffq provides a file-based FIFO queue implementation that supports generic types.
 package ffq
 
 import (
@@ -22,6 +23,15 @@ var (
 	}
 )
 
+// SetQueueBufferSize changes the default buffer size used by queue operations.
+// It also updates the sync.Pool `queueBufPool` to create buffers with the new size.
+//
+// Parameters:
+//   - size: The new buffer size in bytes.
+//
+// Example:
+//
+//	ffq.SetQueueBufferSize(128 * 1024) // Set buffer size to 128KB
 func SetQueueBufferSize(size int) {
 	queueBufferSize = size
 	queueBufPool.New = func() any {

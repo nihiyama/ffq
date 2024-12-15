@@ -12,31 +12,20 @@ import (
 	"time"
 )
 
-// GroupQueue represents a group of queues where each queue is associated with a unique name.
-// It supports operations such as enqueuing, dequeuing, and bulk processing across multiple queues.
-//
-// Fields:
-//   - name: The name of the group queue.
-//   - fileDir: The directory where the queue files are stored.
-//   - queueSize: The maximum number of items that can be held in each queue.
-//   - maxPages: The number of files used in a single rotation cycle.//   - maxFileSize: The maximum size of a single queue file.
-//   - maxIndexSize: The maximum size of the index file.
-//   - initializeBlock: A channel to block until initialization is complete.
-//   - queues: A map of queue names to their respective Queue instances.
-//   - enqueueSig: A channel used for signaling between operations.
-//   - mu: A mutex for synchronizing access to the queues.
+// GroupQueue represents a group of queues with common configurations like size, encoder, and decoder.
+// It manages multiple named queues and supports operations like enqueue, dequeue, and bulk enqueue/dequeue.
 type GroupQueue[T any] struct {
-	queueSize       int
-	maxPages        int
-	name            string
-	fileDir         string
-	queues          map[string]*Queue[T]
-	encoder         func(v any) ([]byte, error)
-	decoder         func(data []byte, v any) error
-	initializeBlock chan struct{}
-	enqueueSig      chan struct{}
-	closeSig        chan struct{}
-	mu              *sync.RWMutex
+	queueSize       int                            // The maximum size of each queue.
+	maxPages        int                            // The maximum number of pages for each queue.
+	name            string                         // The name of the group queue.
+	fileDir         string                         // The directory where queue files are stored.
+	queues          map[string]*Queue[T]           // A map of queue names to their corresponding Queue instances.
+	encoder         func(v any) ([]byte, error)    // Function to encode data before saving to the queue.
+	decoder         func(data []byte, v any) error // Function to decode data when reading from the queue.
+	initializeBlock chan struct{}                  // A channel to block until the queue is fully initialized.
+	enqueueSig      chan struct{}                  // A signal channel to notify enqueue operations.
+	closeSig        chan struct{}                  // A signal channel to notify that the queue is closed.
+	mu              *sync.RWMutex                  // A mutex to protect the map of queues.
 }
 
 type bulkQueueChData[T any] struct {
@@ -50,21 +39,22 @@ type bulkIndicies struct {
 	localIndex  int
 }
 
-// NewGroupQueue creates a new GroupQueue with the specified name and options.
+// NewGroupQueue initializes a new GroupQueue with the given name and options.
+// It sets up the queues, directory, encoder, and decoder for managing the queue data.
 //
 // Parameters:
 //   - name: The name of the group queue.
-//   - opts: A variadic list of options to customize the group queue settings.
+//   - opts: Optional settings for the group queue.
 //
 // Returns:
-//   - *GroupQueue[T]: A pointer to the newly created GroupQueue instance.
-//   - error: An error if the group queue could not be created.
+//   - *GroupQueue: A pointer to the newly created GroupQueue.
+//   - error: An error if any occurs during the queue creation.
 //
 // Example:
 //
-//	groupQueue, err := NewGroupQueue[Data]("myGroupQueue")
+//	gq, err := NewGroupQueue[Data]("myGroupQueue", WithQueueSize(100), WithMaxPages(5))
 //	if err != nil {
-//	  log.Fatal(err)
+//	    log.Fatal(err)
 //	}
 func NewGroupQueue[T any](name string, opts ...Option) (*GroupQueue[T], error) {
 	var err error
@@ -134,20 +124,6 @@ func NewGroupQueue[T any](name string, opts ...Option) (*GroupQueue[T], error) {
 	return &gq, nil
 }
 
-// addQueue adds a new Queue to the GroupQueue with the specified name.
-//
-// Parameters:
-//   - name: The name of the new queue to be added.
-//
-// Returns:
-//   - error: An error if the queue could not be added.
-//
-// Example:
-//
-//	err := groupQueue.addQueue("queue1")
-//	if err != nil {
-//	  log.Fatal(err)
-//	}
 func (gq *GroupQueue[T]) addQueue(name string) error {
 	q, err := NewQueue[T](
 		name,
@@ -170,22 +146,23 @@ func (gq *GroupQueue[T]) addQueue(name string) error {
 	return nil
 }
 
-// Enqueue adds a single item to the specified queue within the GroupQueue.
+// Enqueue adds a single item to the queue identified by the given name.
+// If the queue does not exist, it will be created automatically.
 //
 // Parameters:
-//   - name: The name of the queue to which the item should be added.
-//   - data: A pointer to the item to be added.
+//   - name: The name of the queue to which the data should be enqueued.
+//   - data: The data item to be added to the queue.
 //
 // Returns:
-//   - error: An error if the item could not be enqueued.
+//   - error: An error if the enqueue operation fails.
 //
 // Example:
 //
-//	data := Data{...}
-//	err := groupQueue.Enqueue("queue1", &data)
-//	if err != nil {
-//	  log.Fatal(err)
-//	}
+//	 data := Data{...}
+//		err := gq.Enqueue("queue1", &data)
+//		if err != nil {
+//		    log.Fatal(err)
+//		}
 func (gq *GroupQueue[T]) Enqueue(name string, data *T) error {
 	var err error
 	q, err := gq.getQueue(name)
@@ -204,21 +181,23 @@ func (gq *GroupQueue[T]) Enqueue(name string, data *T) error {
 	return nil
 }
 
-// BulkEnqueue adds multiple items to the specified queue within the GroupQueue.
+// BulkEnqueue adds multiple items to the queue identified by the given name.
+// The items are added in batches, ensuring the queue size limit is respected.
 //
 // Parameters:
-//   - name: The name of the queue to which the items should be added.
-//   - data: A slice of pointers to the items to be added.
+//   - name: The name of the queue to which the data should be enqueued.
+//   - data: A slice of data items to be added to the queue.
 //
 // Returns:
-//   - error: An error if the items could not be enqueued.
+//   - error: An error if the bulk enqueue operation fails.
 //
 // Example:
 //
 //	data := []*Data{{...},{...},...}
-//	err := groupQueue.BulkEnqueue("queue1", data)
+//	err := gq.BulkEnqueue("queue1", data)
+//
 //	if err != nil {
-//	  log.Fatal(err)
+//	    log.Fatal(err)
 //	}
 func (gq *GroupQueue[T]) BulkEnqueue(name string, data []*T) error {
 	var err error
@@ -252,23 +231,21 @@ func (gq *GroupQueue[T]) BulkEnqueue(name string, data []*T) error {
 	return nil
 }
 
-// Dequeue removes and returns items from the queues within the GroupQueue in a round-robin fashion.
-//
-// Parameters:
-//   - batch: The number of items to dequeue from each queue in one operation.
+// Dequeue retrieves items from all non-empty queues in the GroupQueue.
+// The items are sent to a channel for further processing.
 //
 // Returns:
-//   - chan *Message[T]: A channel that yields dequeued messages wrapped in a Message struct.
-//   - error: An error if there was an issue during the dequeue operation.
+//   - chan *Message[T]: A channel from which dequeued items can be received.
+//   - error: An error if the dequeue operation fails.
 //
 // Example:
 //
-//	messages, err := groupQueue.Dequeue(10)
+//	mCh, err := gq.Dequeue()
 //	if err != nil {
-//	  log.Fatal(err)
+//	    log.Fatal(err)
 //	}
-//	for message := range messages {
-//	  fmt.Println("Dequeued message:", *message.Data())
+//	for m := range mCh {
+//	    fmt.Println(m)
 //	}
 func (gq *GroupQueue[T]) Dequeue() (chan *Message[T], error) {
 	var err error
@@ -308,27 +285,25 @@ func (gq *GroupQueue[T]) Dequeue() (chan *Message[T], error) {
 	return mCh, err
 }
 
-// BulkDequeue removes and returns multiple items from the queues within the GroupQueue.
+// BulkDequeue retrieves multiple items from all non-empty queues in the GroupQueue
+// and sends them in batches of the specified size.
 //
 // Parameters:
-//   - batch: The number of items to dequeue from each queue in one operation.
-//   - size: The total number of items to dequeue across all queues.
-//   - lazy: The time in milliseconds to wait for more items before returning.
+//   - size: The number of items to dequeue in each batch.
+//   - lazy: A duration to wait between dequeue operations.
 //
 // Returns:
-//   - chan []*Message[T]: A channel that yields slices of dequeued messages wrapped in Message structs.
-//   - error: An error if there was an issue during the bulk dequeue operation.
+//   - chan []*Message[T]: A channel from which batches of dequeued items can be received.
+//   - error: An error if the bulk dequeue operation fails.
 //
 // Example:
 //
-//	bulkMessages, err := groupQueue.BulkDequeue(10, 100, 500)
+//	msCh, err := gq.BulkDequeue(10, 100*time.Millisecond)
 //	if err != nil {
-//	  log.Fatal(err)
+//	    log.Fatal(err)
 //	}
-//	for messages := range bulkMessages {
-//	  for _, message := range messages {
-//	    fmt.Println("Dequeued message:", *message.Data())
-//	  }
+//	for ms := range msCh {
+//	    fmt.Println(ms)
 //	}
 func (gq *GroupQueue[T]) BulkDequeue(size int, lazy time.Duration) (chan []*Message[T], error) {
 	var err error
@@ -398,23 +373,22 @@ func (gq *GroupQueue[T]) BulkDequeue(size int, lazy time.Duration) (chan []*Mess
 	return msCh, err
 }
 
-// FuncAfterDequeue applies a function to the data of each dequeued item and updates the index.
+// FuncAfterDequeue applies a given function to each item after it is dequeued.
 //
 // Parameters:
-//   - batch: The number of items to dequeue from each queue in one operation.
-//   - f: A function that takes a pointer to the dequeued data and returns an error.
+//   - f: A function that will be applied to each dequeued item.
 //
 // Returns:
-//   - error: An error if the function or index update fails.
+//   - error: An error if the operation fails.
 //
 // Example:
 //
-//	err := groupQueue.FuncAfterDequeue(10, func(data *Data) error {
-//	  fmt.Println(*data)
-//	  return nil
+//	err := gq.FuncAfterDequeue(func(data *T) error {
+//	    fmt.Println("Processed:", data)
+//	    return nil
 //	})
 //	if err != nil {
-//	  log.Fatal(err)
+//	    log.Fatal(err)
 //	}
 func (gq *GroupQueue[T]) FuncAfterDequeue(f func(*T) error) error {
 	var err error
@@ -459,27 +433,24 @@ func (gq *GroupQueue[T]) FuncAfterDequeue(f func(*T) error) error {
 	return err
 }
 
-// FuncAfterBulkDequeue applies a function to the data of multiple dequeued items and updates the indices.
+// FuncAfterBulkDequeue applies a given function to multiple items after they are dequeued in batches.
 //
 // Parameters:
-//   - batch: The number of items to dequeue from each queue in one operation.
-//   - size: The total number of items to dequeue across all queues.
-//   - lazy: The time in milliseconds to wait for more items before applying the function.
-//   - f: A function that takes a slice of pointers to the dequeued data and returns an error.
+//   - size: The number of items to dequeue in each batch.
+//   - lazy: A duration to wait between dequeue operations.
+//   - f: A function that will be applied to each batch of dequeued items.
 //
 // Returns:
-//   - error: An error if the function or index update fails.
+//   - error: An error if the operation fails.
 //
 // Example:
 //
-//	err := groupQueue.FuncAfterBulkDequeue(10, 100, 500, func(data []*Data) error {
-//	  for _, d := range data {
-//	    fmt.Println(*d)
-//	  }
-//	  return nil
+//	err := gq.FuncAfterBulkDequeue(10, 100*time.Millisecond, func(data []*T) error {
+//	    fmt.Println("Processed batch:", data)
+//	    return nil
 //	})
 //	if err != nil {
-//	  log.Fatal(err)
+//	    log.Fatal(err)
 //	}
 func (gq *GroupQueue[T]) FuncAfterBulkDequeue(size int, lazy time.Duration, f func([]*T) error) error {
 	var err error
@@ -611,7 +582,6 @@ func (gq *GroupQueue[T]) initialize() {
 	}
 
 	var wg sync.WaitGroup
-	fmt.Println(gq.fileDir, entries)
 
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -629,12 +599,21 @@ func (gq *GroupQueue[T]) initialize() {
 	gq.initializeBlock <- struct{}{}
 }
 
-// WaitInitialize blocks until the GroupQueue initialization is complete.
+// WaitInitialize blocks until the group queue is fully initialized.
 //
 // Example:
 //
-//	groupQueue.WaitInitialize()
-//	fmt.Println("GroupQueue initialized")
+//	gq, _ := NewGroupQueue(...)
+//	// start dequeue
+//	go func(){
+//		for {
+//			mCh, _ := gq.Dequeue()
+//		}
+//	}
+//	gq.WaitInitialize()
+//	go func() {
+//		gq.Enqueu(data)
+//	}
 func (gq *GroupQueue[T]) WaitInitialize() {
 	<-gq.initializeBlock
 }
@@ -656,15 +635,17 @@ func (gq *GroupQueue[T]) getQueue(name string) (*Queue[T], error) {
 	return q, nil
 }
 
-// CloseQueue closes all the queues in the GroupQueue.
-//
-// This method locks the GroupQueue, iterates over all the queues in it, and calls their
-// respective CloseQueue methods. If any errors occur while closing the queues, they are
-// accumulated and returned as a combined error.
+// CloseQueue closes all queues in the group and signals the closure.
 //
 // Returns:
-//   - error: An error that accumulates any issues that occurred while closing the queues.
-//     If all queues are closed successfully, nil is returned.
+//   - error: An error if any of the queues fail to close.
+//
+// Example:
+//
+//	err := gq.CloseQueue()
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
 func (gq *GroupQueue[T]) CloseQueue() error {
 	var err error
 	gq.mu.Lock()
@@ -681,19 +662,17 @@ func (gq *GroupQueue[T]) CloseQueue() error {
 	return err
 }
 
-// CloseIndex closes the index files of all queues in the GroupQueue after ensuring all queues are empty.
-//
-// This method first checks if all queues in the GroupQueue are empty by repeatedly calling
-// lengthWithNotEmpty and waiting for the specified interval if there are still items in any queue.
-// Once all queues are confirmed to be empty, it closes the index files of each queue.
-// If any errors occur while closing the index files, they are accumulated and returned as a combined error.
-//
-// Parameters:
-//   - interval: The duration to wait between checks for non-empty queues.
+// CloseIndex closes the index files associated with all queues in the group.
 //
 // Returns:
-//   - error: An error that accumulates any issues that occurred while closing the index files.
-//     If all index files are closed successfully, nil is returned.
+//   - error: An error if any of the index files fail to close.
+//
+// Example:
+//
+//	err := gq.CloseIndex()
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
 func (gq *GroupQueue[T]) CloseIndex() error {
 	var err error
 	gq.mu.Lock()
@@ -707,18 +686,20 @@ func (gq *GroupQueue[T]) CloseIndex() error {
 	return err
 }
 
-// UpdateIndex updates the index of the specified queue within the GroupQueue.
-//
-// This method locates the queue associated with the given message and attempts to update its index
-// using the message's index value. If the specified queue is not found, or if there is an error
-// during the index update, the errors are accumulated and returned.
+// UpdateIndex updates the index of a given message in its corresponding queue.
 //
 // Parameters:
-//   - message: A pointer to a Message containing the queue name and index to be updated.
+//   - message: The message whose index needs to be updated.
 //
 // Returns:
-//   - error: An error that combines any errors encountered during the update process.
-//     If the queue is found and the index is updated successfully, nil is returned.
+//   - error: An error if the update fails.
+//
+// Example:
+//
+//	err := gq.UpdateIndex(message)
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
 func (gq *GroupQueue[T]) UpdateIndex(message *Message[T]) error {
 	var err error
 	q, gqErr := gq.getQueue(message.name)
