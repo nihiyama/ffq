@@ -452,9 +452,10 @@ func TestQEnqueueDequeue(t *testing.T) {
 			var wg sync.WaitGroup
 			wg.Add(1)
 			go func(wg *sync.WaitGroup) {
+				var err error
 				defer wg.Done()
 				for _, data := range tt.enqueueData {
-					err := q.Enqueue(data)
+					err = q.Enqueue(data)
 					if err != nil {
 						t.Errorf("enqueue failed: %v", err)
 					}
@@ -467,6 +468,7 @@ func TestQEnqueueDequeue(t *testing.T) {
 
 			wg.Add(1)
 			go func(wg *sync.WaitGroup) {
+				var err error
 				defer wg.Done()
 				i := 0
 				for {
@@ -573,6 +575,7 @@ func TestQEnqueueDequeueWithFunc(t *testing.T) {
 			var wg sync.WaitGroup
 			wg.Add(1)
 			go func(wg *sync.WaitGroup) {
+				var err error
 				defer wg.Done()
 				for _, data := range tt.enqueueData {
 					err := q.Enqueue(data)
@@ -588,6 +591,7 @@ func TestQEnqueueDequeueWithFunc(t *testing.T) {
 
 			wg.Add(1)
 			go func(wg *sync.WaitGroup) {
+				var err error
 				defer wg.Done()
 				i := 0
 				for {
@@ -691,8 +695,9 @@ func TestQBulkEnqueueDequeue(t *testing.T) {
 			var wg sync.WaitGroup
 			wg.Add(1)
 			go func(wg *sync.WaitGroup) {
+				var err error
 				defer wg.Done()
-				err := q.BulkEnqueue(tt.enqueueData)
+				err = q.BulkEnqueue(tt.enqueueData)
 				if err != nil {
 					t.Errorf("enqueue failed: %v", err)
 				}
@@ -704,6 +709,7 @@ func TestQBulkEnqueueDequeue(t *testing.T) {
 
 			wg.Add(1)
 			go func(wg *sync.WaitGroup) {
+				var err error
 				defer wg.Done()
 				i := 0
 				for {
@@ -728,7 +734,7 @@ func TestQBulkEnqueueDequeue(t *testing.T) {
 					}
 				}
 				// next confirm bulkdequeue
-				_, err := q.BulkDequeue(tt.bulkSize, tt.lazy)
+				_, err = q.BulkDequeue(tt.bulkSize, tt.lazy)
 				if !IsErrQueueClose(err) {
 					t.Errorf("Failed test: error, %v", err)
 				}
@@ -822,8 +828,9 @@ func TestQBulkEnqueueDequeueWithFunc(t *testing.T) {
 			var wg sync.WaitGroup
 			wg.Add(1)
 			go func(wg *sync.WaitGroup) {
+				var err error
 				defer wg.Done()
-				err := q.BulkEnqueue(tt.enqueueData)
+				err = q.BulkEnqueue(tt.enqueueData)
 				if err != nil {
 					t.Errorf("enqueue failed: %v", err)
 				}
@@ -835,6 +842,7 @@ func TestQBulkEnqueueDequeueWithFunc(t *testing.T) {
 
 			wg.Add(1)
 			go func(wg *sync.WaitGroup) {
+				var err error
 				defer wg.Done()
 				for {
 					err := q.FuncAfterBulkDequeue(tt.bulkSize, tt.lazy, f)
@@ -850,7 +858,7 @@ func TestQBulkEnqueueDequeueWithFunc(t *testing.T) {
 					}
 				}
 				// next confirm bulkdequeue
-				err := q.FuncAfterBulkDequeue(tt.bulkSize, tt.lazy, f)
+				err = q.FuncAfterBulkDequeue(tt.bulkSize, tt.lazy, f)
 				if !IsErrQueueClose(err) {
 					t.Errorf("Failed test: error, %v", err)
 				}
@@ -898,8 +906,9 @@ func TestQLength(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func(wg *sync.WaitGroup) {
+		var err error
 		defer wg.Done()
-		err := q.BulkEnqueue(enqueueData)
+		err = q.BulkEnqueue(enqueueData)
 		if err != nil {
 			t.Errorf("enqueue failed: %v", err)
 		}

@@ -313,6 +313,7 @@ func TestGQEnqueueDequeue(t *testing.T) {
 			var wg sync.WaitGroup
 			wg.Add(1)
 			go func(wg *sync.WaitGroup) {
+				var err error
 				defer wg.Done()
 				for _, data := range tt.enqueueData {
 					err := gq.Enqueue("queue1", data)
@@ -340,10 +341,12 @@ func TestGQEnqueueDequeue(t *testing.T) {
 
 			wg.Add(1)
 			go func(wg *sync.WaitGroup) {
+				var err error
+				var messages chan *Message[Data]
 				defer wg.Done()
 				i := 0
 				for {
-					messages, err := gq.Dequeue()
+					messages, err = gq.Dequeue()
 					if err != nil {
 						if IsErrQueueClose(err) {
 							err = gq.CloseIndex()
@@ -445,6 +448,7 @@ func TestGQEnqueueDequeueWithFunc(t *testing.T) {
 			var wg sync.WaitGroup
 			wg.Add(1)
 			go func(wg *sync.WaitGroup) {
+				var err error
 				defer wg.Done()
 				for _, data := range tt.enqueueData {
 					err := gq.Enqueue("queue1", data)
@@ -478,9 +482,10 @@ func TestGQEnqueueDequeueWithFunc(t *testing.T) {
 
 			wg.Add(1)
 			go func(wg *sync.WaitGroup) {
+				var err error
 				defer wg.Done()
 				for {
-					err := gq.FuncAfterDequeue(f)
+					err = gq.FuncAfterDequeue(f)
 					if err != nil {
 						if IsErrQueueClose(err) {
 							err = gq.CloseIndex()
@@ -579,8 +584,9 @@ func TestGQBulkEnqueueDequeue(t *testing.T) {
 			var wg sync.WaitGroup
 			wg.Add(1)
 			go func(wg *sync.WaitGroup) {
+				var err error
 				defer wg.Done()
-				err := gq.BulkEnqueue("queue1", tt.enqueueData)
+				err = gq.BulkEnqueue("queue1", tt.enqueueData)
 				if err != nil {
 					t.Errorf("enqueue failed: %v", err)
 				}
@@ -601,10 +607,12 @@ func TestGQBulkEnqueueDequeue(t *testing.T) {
 
 			wg.Add(1)
 			go func(wg *sync.WaitGroup) {
+				var err error
+				var messages chan []*Message[Data]
 				defer wg.Done()
 				i := 0
 				for {
-					messages, err := gq.BulkDequeue(tt.bulkSize, tt.lazy)
+					messages, err = gq.BulkDequeue(tt.bulkSize, tt.lazy)
 					if err != nil {
 						if IsErrQueueClose(err) {
 							err = gq.CloseIndex()
@@ -712,8 +720,9 @@ func TestGQBulkEnqueueDequeueWithFunc(t *testing.T) {
 			var wg sync.WaitGroup
 			wg.Add(1)
 			go func(wg *sync.WaitGroup) {
+				var err error
 				defer wg.Done()
-				err := gq.BulkEnqueue("queue1", tt.enqueueData)
+				err = gq.BulkEnqueue("queue1", tt.enqueueData)
 				if err != nil {
 					t.Errorf("enqueue failed: %v", err)
 				}
@@ -740,9 +749,10 @@ func TestGQBulkEnqueueDequeueWithFunc(t *testing.T) {
 
 			wg.Add(1)
 			go func(wg *sync.WaitGroup) {
+				var err error
 				defer wg.Done()
 				for {
-					err := gq.FuncAfterBulkDequeue(tt.bulkSize, tt.lazy, f)
+					err = gq.FuncAfterBulkDequeue(tt.bulkSize, tt.lazy, f)
 					if err != nil {
 						if IsErrQueueClose(err) {
 							err = gq.CloseIndex()
@@ -800,9 +810,10 @@ func TestGQLength(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func(wg *sync.WaitGroup) {
+		var err error
 		defer wg.Done()
 		for _, tq := range testQueues {
-			err := gq.BulkEnqueue(tq, enqueueData)
+			err = gq.BulkEnqueue(tq, enqueueData)
 			if err != nil {
 				t.Errorf("enqueue failed: %v", err)
 			}
