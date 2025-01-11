@@ -493,6 +493,8 @@ func (q *Queue[T]) Length() int {
 }
 
 func (q *Queue[T]) initialize(tailGlobalIndex int, tailLocalIndex int) {
+	q.qMu.Lock()
+	defer q.qMu.Unlock()
 	var queueFile *os.File
 	isLast := true
 

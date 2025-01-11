@@ -249,6 +249,7 @@ func (gq *GroupQueue[T]) BulkEnqueue(name string, data []*T) error {
 //	}
 func (gq *GroupQueue[T]) Dequeue() (chan *Message[T], error) {
 	var err error
+	var errMu sync.Mutex
 	mCh := make(chan *Message[T])
 	// if queue has been closed, return ErrQueueClose
 	select {
@@ -274,7 +275,9 @@ func (gq *GroupQueue[T]) Dequeue() (chan *Message[T], error) {
 				for i := 0; i < length; i++ {
 					message, qErr := q.Dequeue()
 					if qErr != nil {
+						errMu.Lock()
 						err = errors.Join(err, fmt.Errorf("queue name: %s, %v", name, qErr))
+						errMu.Unlock()
 					}
 					mCh <- message
 				}
@@ -307,6 +310,7 @@ func (gq *GroupQueue[T]) Dequeue() (chan *Message[T], error) {
 //	}
 func (gq *GroupQueue[T]) BulkDequeue(size int, lazy time.Duration) (chan []*Message[T], error) {
 	var err error
+	var errMu sync.Mutex
 	msCh := make(chan []*Message[T])
 	var messages []*Message[T]
 	var messageMu sync.Mutex
@@ -316,7 +320,9 @@ func (gq *GroupQueue[T]) BulkDequeue(size int, lazy time.Duration) (chan []*Mess
 		defer messageMu.Unlock()
 		messages = append(messages, m)
 		if len(messages) == size {
-			msCh <- messages
+			sendMs := make([]*Message[T], len(messages))
+			copy(sendMs, messages)
+			msCh <- sendMs
 			messages = make([]*Message[T], 0, size)
 		}
 	}
@@ -360,7 +366,9 @@ func (gq *GroupQueue[T]) BulkDequeue(size int, lazy time.Duration) (chan []*Mess
 						for i := 0; i < length; i++ {
 							message, qErr := q.Dequeue()
 							if qErr != nil {
+								errMu.Lock()
 								err = errors.Join(err, fmt.Errorf("queue name: %s, %v", name, qErr))
+								errMu.Unlock()
 							}
 							appendMessages(message)
 						}
@@ -392,6 +400,7 @@ func (gq *GroupQueue[T]) BulkDequeue(size int, lazy time.Duration) (chan []*Mess
 //	}
 func (gq *GroupQueue[T]) FuncAfterDequeue(f func(*T) error) error {
 	var err error
+	var errMu sync.Mutex
 
 	// if queue has been closed, return ErrQueueClose
 	select {
@@ -416,15 +425,21 @@ func (gq *GroupQueue[T]) FuncAfterDequeue(f func(*T) error) error {
 			for i := 0; i < length; i++ {
 				message, qErr := q.Dequeue()
 				if qErr != nil {
+					errMu.Lock()
 					err = errors.Join(err, fmt.Errorf("queue name: %s, %v", name, qErr))
+					errMu.Unlock()
 				}
 				fErr := f(message.data)
 				if fErr != nil {
+					errMu.Lock()
 					err = errors.Join(err, fErr)
+					errMu.Unlock()
 				}
 				iErr := q.writeIndex(message.page, message.globalIndex, message.localIndex)
 				if iErr != nil {
+					errMu.Lock()
 					err = errors.Join(err, iErr)
+					errMu.Unlock()
 				}
 			}
 		}(&queueWg, name, length, q)
@@ -454,12 +469,13 @@ func (gq *GroupQueue[T]) FuncAfterDequeue(f func(*T) error) error {
 //	}
 func (gq *GroupQueue[T]) FuncAfterBulkDequeue(size int, lazy time.Duration, f func([]*T) error) error {
 	var err error
+	var errMu sync.Mutex
 	dataCh := make(chan bulkQueueChData[T])
 	var data []*T
 	var indices map[string]bulkIndicies
-	var dataMu sync.Mutex
+	var dataMu sync.RWMutex
 
-	appendData := func(m *Message[T]) {
+	appendData := func(m *Message[T], indexLength int) {
 		dataMu.Lock()
 		defer dataMu.Unlock()
 		indices[m.name] = bulkIndicies{
@@ -469,11 +485,19 @@ func (gq *GroupQueue[T]) FuncAfterBulkDequeue(size int, lazy time.Duration, f fu
 		}
 		data = append(data, m.data)
 		if len(data) == size {
+			// copy for send consumer
+			sendData := make([]*T, len(data))
+			copy(sendData, data)
+			sendIndices := make(map[string]bulkIndicies, len(indices))
+			for k, v := range indices {
+				sendIndices[k] = v
+			}
 			dataCh <- bulkQueueChData[T]{
-				data:    data,
-				indices: indices,
+				data:    sendData,
+				indices: sendIndices,
 			}
 			data = make([]*T, 0, size)
+			indices = make(map[string]bulkIndicies, indexLength)
 		}
 	}
 	resetData := func(indexLength int) {
@@ -522,9 +546,11 @@ func (gq *GroupQueue[T]) FuncAfterBulkDequeue(size int, lazy time.Duration, f fu
 						for i := 0; i < length; i++ {
 							message, qErr := q.Dequeue()
 							if qErr != nil {
+								errMu.Lock()
 								err = errors.Join(err, fmt.Errorf("queue name: %s, %v", name, qErr))
+								errMu.Unlock()
 							}
-							appendData(message)
+							appendData(message, len(nameQueueLenMap))
 						}
 					}(&queueWg, name, length, q)
 				}
@@ -539,16 +565,22 @@ func (gq *GroupQueue[T]) FuncAfterBulkDequeue(size int, lazy time.Duration, f fu
 		}
 		fErr := f(d.data)
 		if fErr != nil {
+			errMu.Lock()
 			err = errors.Join(err, fErr)
+			errMu.Unlock()
 		}
 		for name, bulkIndex := range d.indices {
 			q, gqErr := gq.getQueue(name)
 			if gqErr != nil {
+				errMu.Lock()
 				err = errors.Join(err, gqErr)
+				errMu.Unlock()
 			}
 			wiErr := q.writeIndex(bulkIndex.page, bulkIndex.globalIndex, bulkIndex.localIndex)
 			if wiErr != nil {
+				errMu.Lock()
 				err = errors.Join(err, wiErr)
+				errMu.Unlock()
 			}
 		}
 	}
