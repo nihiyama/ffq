@@ -6,11 +6,12 @@ import (
 )
 
 type options struct {
-	fileDir *string
-	size    *uint64
-	maxPage *uint64
-	encoder *func(v any) ([]byte, error)
-	decoder *func(data []byte, v any) error
+	size      *uint64
+	maxPage   *uint64
+	groupSize *int
+	fileDir   *string
+	encoder   *func(v any) ([]byte, error)
+	decoder   *func(data []byte, v any) error
 }
 
 // Option defines a function type that modifies the options for creating a Queue or GroupQueue.
@@ -115,6 +116,13 @@ func WithEncoder(encoder func(v any) ([]byte, error)) Option {
 func WithDecoder(decoder func(data []byte, v any) error) Option {
 	return func(options *options) error {
 		options.decoder = &decoder
+		return nil
+	}
+}
+
+func WithGroupSize(size int) Option {
+	return func(options *options) error {
+		options.groupSize = &size
 		return nil
 	}
 }

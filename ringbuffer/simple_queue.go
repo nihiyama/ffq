@@ -38,6 +38,7 @@ type Queue[T any] struct {
 	decoder         func(data []byte, v any) error // Function to decode data when reading from the queue.
 	queue           []*Message[T]
 	isClose         bool
+	isIndexClosed   bool
 	initializeBlock chan struct{} // A channel to block until the queue is fully initialized.
 }
 
@@ -134,6 +135,7 @@ func NewQueue[T any](name string, opts ...Option) (*Queue[T], error) {
 		decoder:         decoder,
 		queue:           queue,
 		isClose:         false,
+		isIndexClosed:   false,
 		initializeBlock: make(chan struct{}),
 	}
 	q.signalNotFull()
@@ -208,18 +210,6 @@ func (q *Queue[T]) dequeue(head uint64) *Message[T] {
 	m := q.queue[head&q.mask]
 	return m
 }
-
-// func (q *Queue[T]) bulkDequeue(head uint64, batch uint64) []*Message[T] {
-// 	ms := make([]*Message[T], batch)
-// 	if (head&q.mask)+batch > q.size {
-// 		remainingCap := batch - (q.size - (head & q.mask))
-// 		copy(ms, q.queue[head&q.mask:q.size])
-// 		copy(ms, q.queue[0:remainingCap])
-// 	} else {
-// 		copy(ms, q.queue[head&q.mask:((head+batch-1)&q.mask)+1])
-// 	}
-// 	return ms
-// }
 
 // Enqueue adds a single item to the queue.
 //
@@ -388,17 +378,6 @@ func (q *Queue[T]) BulkDequeue(size uint64, lazy time.Duration) ([]*Message[T], 
 			q.storeHead(head, 1)
 			ms = append(ms, m)
 		}
-		// batch := tail - head
-		// if batch > 0 {
-		// 	if batch > size {
-		// 		batch = size
-		// 	}
-		// 	got := q.bulkDequeue(head, batch)
-		// 	q.storeHead(head, batch)
-		// 	q.signalNotFull()
-		// 	ms = append(ms, got...)
-		// 	size = size - batch
-		// }
 
 		if uint64(len(ms)) == size {
 			q.signalNotFull()
@@ -809,6 +788,7 @@ func (q *Queue[T]) CloseIndex() error {
 	if err != nil {
 		return err
 	}
+	q.isIndexClosed = true
 	return nil
 }
 

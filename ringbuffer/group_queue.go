@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -22,16 +23,15 @@ type GroupQueue[T any] struct {
 	queues          []*Queue[T] // A map of queue names to their corresponding Queue instances.
 	nameIndices     sync.Map
 	groupSize       int
-	queueCount      int
-	closeCount      int
-	activeQueue     int
+	queueCount      uint32
+	closeCount      uint32
+	activeQueue     uint32
 	isClose         bool
 	encoder         func(v any) ([]byte, error)    // Function to encode data before saving to the queue.
 	decoder         func(data []byte, v any) error // Function to decode data when reading from the queue.
 	initializeBlock chan struct{}                  // A channel to block until the queue is fully initialized.
 	enqueueSig      chan struct{}                  // A signal channel to notify enqueue operations.
 	closeSig        chan struct{}                  // A signal channel to notify that the queue is closed.
-	mu              *sync.RWMutex                  // A mutex to protect the map of queues.
 }
 
 // NewGroupQueue initializes a new GroupQueue with the given name and options.
@@ -98,7 +98,6 @@ func NewGroupQueue[T any](name string, opts ...Option) (*GroupQueue[T], error) {
 	}
 
 	queues := make([]*Queue[T], groupSize)
-	var mu sync.RWMutex
 	enqueueSig := make(chan struct{}, 1)
 	closeSig := make(chan struct{}, 1)
 
@@ -117,7 +116,6 @@ func NewGroupQueue[T any](name string, opts ...Option) (*GroupQueue[T], error) {
 		encoder:         encoder,
 		decoder:         decoder,
 		initializeBlock: make(chan struct{}),
-		mu:              &mu,
 		enqueueSig:      enqueueSig,
 		closeSig:        closeSig,
 	}
@@ -141,14 +139,12 @@ func (gq *GroupQueue[T]) addQueue(name string) error {
 	if err != nil {
 		return err
 	}
-	gq.mu.Lock()
-	if gq.queueCount == gq.groupSize {
+	queueCount := atomic.AddUint32(&gq.queueCount, 1)
+	if int(queueCount) == gq.groupSize {
 		return fmt.Errorf("reached group queue max size, %d", gq.groupSize)
 	}
-	gq.nameIndices.Store(name, gq.queueCount)
-	gq.queues[gq.queueCount] = q
-	gq.queueCount++
-	gq.mu.Unlock()
+	gq.nameIndices.Store(name, queueCount-1)
+	gq.queues[queueCount-1] = q
 	q.WaitInitialize()
 	if q.Length() > 0 {
 		gq.signalEnqueue()
@@ -261,6 +257,7 @@ func (gq *GroupQueue[T]) Dequeue() (*Message[T], error) {
 	var err error
 	var qls []uint64
 	var total uint64
+	var activeQueue uint32
 	// if queue has been closed, return ErrQueueClose
 	for {
 		select {
@@ -273,20 +270,22 @@ func (gq *GroupQueue[T]) Dequeue() (*Message[T], error) {
 				return nil, ErrQueueClose
 			}
 		}
+		activeQueue = atomic.LoadUint32(&gq.activeQueue)
 
 		qls, total = gq.Length() // length > 0 is guaranteed
+		activeQueue = gq.rotateActiveQueue(activeQueue, uint32(len(qls)))
 		if total != 0 {
 			break
 		}
 	}
-	ql := qls[gq.activeQueue]
+	ql := qls[activeQueue]
 	for ql == 0 {
-		gq.rotateActiveQueue()
-		ql = qls[gq.activeQueue]
+		activeQueue = gq.rotateActiveQueue(activeQueue, uint32(len(qls)))
+		ql = qls[activeQueue]
 	}
 
-	q := gq.queues[gq.activeQueue]
-	m, _ := q.Dequeue() // always get it
+	q := gq.queues[activeQueue]
+	m, err := q.Dequeue()
 	if total-1 > 0 {
 		gq.signalEnqueue()
 	}
@@ -316,7 +315,7 @@ func (gq *GroupQueue[T]) Dequeue() (*Message[T], error) {
 func (gq *GroupQueue[T]) BulkDequeue(size int, lazy time.Duration) ([]*Message[T], error) {
 	var qls []uint64
 	var total uint64
-
+	var activeQueue uint32
 	for {
 		select {
 		case <-gq.enqueueSig:
@@ -328,15 +327,17 @@ func (gq *GroupQueue[T]) BulkDequeue(size int, lazy time.Duration) ([]*Message[T
 				return []*Message[T]{}, ErrQueueClose
 			}
 		}
+		activeQueue = atomic.LoadUint32(&gq.activeQueue)
 
-		_, total = gq.Length() // length > 0 is guaranteed
+		qls, total = gq.Length() // length > 0 is guaranteed
+		activeQueue = gq.rotateActiveQueue(activeQueue, uint32(len(qls)))
 		if total != 0 {
 			break
 		}
 	}
 	// add enqueueSignal because get enqueueSignal first
 	ms := make([]*Message[T], 0, size)
-	batch := size / gq.queueCount
+	batch := size / int(atomic.LoadUint32(&gq.queueCount))
 	gq.signalEnqueue()
 	timer := time.After(lazy)
 	for {
@@ -348,13 +349,14 @@ func (gq *GroupQueue[T]) BulkDequeue(size int, lazy time.Duration) ([]*Message[T
 			if total == 0 {
 				break
 			}
-			ql := qls[gq.activeQueue]
+			activeQueue = gq.rotateActiveQueue(activeQueue, uint32(len(qls)))
+			ql := qls[activeQueue]
 			for ql == 0 {
-				gq.rotateActiveQueue()
-				ql = qls[gq.activeQueue]
+				activeQueue = gq.rotateActiveQueue(activeQueue, uint32(len(qls)))
+				ql = qls[activeQueue]
 			}
 
-			q := gq.queues[gq.activeQueue]
+			q := gq.queues[activeQueue]
 			n := batch
 			if ql < uint64(n) {
 				n = int(ql)
@@ -363,10 +365,11 @@ func (gq *GroupQueue[T]) BulkDequeue(size int, lazy time.Duration) ([]*Message[T
 				n = size - len(ms)
 			}
 			for i := 0; i < n; i++ {
-				m, _ := q.Dequeue() // always get it
-				ms = append(ms, m)
+				m, _ := q.Dequeue()
+				if m != nil {
+					ms = append(ms, m)
+				}
 			}
-			gq.rotateActiveQueue()
 			if total-uint64(n) > 0 {
 				gq.signalEnqueue()
 			}
@@ -398,6 +401,7 @@ func (gq *GroupQueue[T]) FuncAfterDequeue(f func(*T) error) error {
 	var err error
 	var qls []uint64
 	var total uint64
+	var activeQueue uint32
 
 	// if queue has been closed, return ErrQueueClose
 	select {
@@ -409,20 +413,28 @@ func (gq *GroupQueue[T]) FuncAfterDequeue(f func(*T) error) error {
 		default:
 			return ErrQueueClose
 		}
+		activeQueue = atomic.LoadUint32(&gq.activeQueue)
 
 		qls, total = gq.Length() // length > 0 is guaranteed
+		activeQueue = gq.rotateActiveQueue(activeQueue, uint32(len(qls)))
 		if total != 0 {
 			break
 		}
 	}
-	ql := qls[gq.activeQueue]
+	ql := qls[activeQueue]
 	for ql == 0 {
-		gq.rotateActiveQueue()
-		ql = qls[gq.activeQueue]
+		activeQueue = gq.rotateActiveQueue(activeQueue, uint32(len(qls)))
+		ql = qls[activeQueue]
 	}
 
-	q := gq.queues[gq.activeQueue]
-	m, _ := q.Dequeue() // always get it
+	q := gq.queues[activeQueue]
+	m, err := q.Dequeue()
+	if total-1 > 0 {
+		gq.signalEnqueue()
+	}
+	if err != nil {
+		return err
+	}
 	err = f(m.item)
 	if err != nil {
 		return err
@@ -430,9 +442,6 @@ func (gq *GroupQueue[T]) FuncAfterDequeue(f func(*T) error) error {
 	err = q.writeIndex(m.index)
 	if err != nil {
 		return err
-	}
-	if total-1 > 0 {
-		gq.signalEnqueue()
 	}
 	return nil
 }
@@ -460,7 +469,7 @@ func (gq *GroupQueue[T]) FuncAfterBulkDequeue(size int, lazy time.Duration, f fu
 	var err error
 	var qls []uint64
 	var total uint64
-
+	var activeQueue uint32
 	for {
 		select {
 		case <-gq.enqueueSig:
@@ -472,8 +481,10 @@ func (gq *GroupQueue[T]) FuncAfterBulkDequeue(size int, lazy time.Duration, f fu
 				return ErrQueueClose
 			}
 		}
+		activeQueue = atomic.LoadUint32(&gq.activeQueue)
 
-		_, total = gq.Length() // length > 0 is guaranteed
+		qls, total = gq.Length() // length > 0 is guaranteed
+		activeQueue = gq.rotateActiveQueue(activeQueue, uint32(len(qls)))
 		if total != 0 {
 			break
 		}
@@ -481,9 +492,9 @@ func (gq *GroupQueue[T]) FuncAfterBulkDequeue(size int, lazy time.Duration, f fu
 
 	// add enqueueSignal because get enqueueSignal first
 	items := make([]*T, 0, size)
-	batch := size / gq.queueCount
+	batch := size / int(atomic.LoadUint32(&gq.queueCount))
 	gq.signalEnqueue()
-	lastIndexMap := make(map[int]uint64, gq.maxPage)
+	lastIndexMap := make(map[uint32]uint64, gq.maxPage)
 	timer := time.After(lazy)
 LOOP:
 	for {
@@ -495,13 +506,14 @@ LOOP:
 			if total == 0 {
 				break
 			}
-			ql := qls[gq.activeQueue]
+			activeQueue = gq.rotateActiveQueue(activeQueue, uint32(len(qls)))
+			ql := qls[activeQueue]
 			for ql == 0 {
-				gq.rotateActiveQueue()
-				ql = qls[gq.activeQueue]
+				activeQueue = gq.rotateActiveQueue(activeQueue, uint32(len(qls)))
+				ql = qls[activeQueue]
 			}
 
-			q := gq.queues[gq.activeQueue]
+			q := gq.queues[activeQueue]
 			n := batch
 			if ql < uint64(n) {
 				n = int(ql)
@@ -510,11 +522,12 @@ LOOP:
 				n = size - len(items)
 			}
 			for i := 0; i < n; i++ {
-				m, _ := q.Dequeue() // always get it
-				items = append(items, m.item)
-				lastIndexMap[gq.activeQueue] = m.index
+				m, _ := q.Dequeue()
+				if m != nil {
+					items = append(items, m.item)
+					lastIndexMap[activeQueue] = m.index
+				}
 			}
-			gq.rotateActiveQueue()
 			if total-uint64(n) > 0 {
 				gq.signalEnqueue()
 			}
@@ -613,7 +626,7 @@ func (gq *GroupQueue[T]) getQueue(name string) (*Queue[T], error) {
 	if !ok {
 		return nil, fmt.Errorf("queue name: %s, %v", name, ErrQueueNotFound)
 	}
-	q := gq.queues[i.(int)]
+	q := gq.queues[i.(uint32)]
 	return q, nil
 }
 
@@ -657,21 +670,20 @@ func (gq *GroupQueue[T]) CloseIndex() error {
 		if q == nil {
 			break
 		}
-		if q.Length() == 0 && q.isClose {
+		if q.Length() == 0 && q.isClose && !q.isIndexClosed {
 			closeErr := q.indexFile.Close()
 			if closeErr != nil {
-				err = errors.Join(err, fmt.Errorf("queue name: %s, %v", q.name, closeErr))
+				err = fmt.Errorf("queue name: %s, %v", q.name, closeErr)
 			}
-			gq.mu.Lock()
-			gq.closeCount++
-			gq.mu.Unlock()
+			q.isIndexClosed = true
+			atomic.AddUint32(&gq.closeCount, 1)
 		}
 	}
 	return err
 }
 
 func (gq *GroupQueue[T]) IsAllIndexClosed() bool {
-	return gq.isClose && gq.closeCount == gq.queueCount
+	return gq.isClose && atomic.LoadUint32(&gq.closeCount) == atomic.LoadUint32(&gq.queueCount)
 }
 
 // UpdateIndex updates the index of a given m in its corresponding queue.
@@ -701,9 +713,10 @@ func (gq *GroupQueue[T]) UpdateIndex(m *Message[T]) error {
 	return err
 }
 
-func (gq *GroupQueue[T]) rotateActiveQueue() {
-	gq.activeQueue++
-	if gq.activeQueue > gq.queueCount-1 {
-		gq.activeQueue = 0
+func (gq *GroupQueue[T]) rotateActiveQueue(activeQueue uint32, queueNums uint32) uint32 {
+	activeQueue++
+	if activeQueue > queueNums-1 {
+		activeQueue = 0
 	}
+	return activeQueue
 }
