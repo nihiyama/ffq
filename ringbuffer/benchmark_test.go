@@ -176,8 +176,127 @@ func BenchmarkSimpleQueueBulkEnqueueDequeue(b *testing.B) {
 	}
 }
 
-func BenchmarkGroupQueueEnqueueDequeue_3Group(b *testing.B) {
-	testQueues := []string{"queue1", "queue2", "queue3"}
+func BenchmarkSimpleQueueEnqueueDequeue_5MP(b *testing.B) {
+	for _, tt := range tests {
+		b.Run(fmt.Sprintf("Size%d", tt), func(b *testing.B) {
+			dir := fmt.Sprintf("testdata/benchmark/simple_queue/single_mp/%d/ffq", tt)
+			data := createData(tt)
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				q, err := ringbuffer.NewQueue[BenchmarkData](
+					"benchmark",
+					ringbuffer.WithFileDir(dir),
+					ringbuffer.WithQueueSize(1024),
+					ringbuffer.WithMaxPage(3),
+					ringbuffer.WithQueueType(ringbuffer.MPSC),
+				)
+				if err != nil {
+					panic(err)
+				}
+
+				q.WaitInitialize()
+				var wg sync.WaitGroup
+				var wgEnqueue sync.WaitGroup
+				wg.Add(2)
+
+				b.StartTimer()
+				go func(wg *sync.WaitGroup) {
+					defer wg.Done()
+					for i := 0; i < 5; i++ {
+						wgEnqueue.Add(1)
+						go func(wg *sync.WaitGroup) {
+							defer wg.Done()
+							for _, d := range data {
+								q.Enqueue(d)
+							}
+						}(&wgEnqueue)
+					}
+					wgEnqueue.Wait()
+					q.CloseQueue()
+				}(&wg)
+				go func(wg *sync.WaitGroup) {
+					defer wg.Done()
+					for {
+						m, err := q.Dequeue()
+						if ringbuffer.IsErrQueueClose(err) {
+							q.CloseIndex()
+							return
+						} else {
+							q.UpdateIndex(m)
+						}
+					}
+				}(&wg)
+				wg.Wait()
+				b.StopTimer()
+
+				os.RemoveAll(dir)
+			}
+		})
+	}
+}
+
+func BenchmarkSimpleQueueBulkEnqueueDequeue_5MP(b *testing.B) {
+	var size uint64 = 100
+	lazy := 10 * time.Millisecond
+	for _, tt := range tests {
+		b.Run(fmt.Sprintf("Size%d", tt), func(b *testing.B) {
+			dir := fmt.Sprintf("testdata/benchmark/simple_queue/bulk_mp/%d/ffq", tt)
+			data := createData(tt)
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				q, _ := ringbuffer.NewQueue[BenchmarkData](
+					"benchmark",
+					ringbuffer.WithFileDir(dir),
+					ringbuffer.WithQueueSize(1024),
+					ringbuffer.WithMaxPage(3),
+					ringbuffer.WithQueueType(ringbuffer.MPSC),
+				)
+				q.WaitInitialize()
+				var wg sync.WaitGroup
+				var wgEnqueue sync.WaitGroup
+				wg.Add(2)
+
+				b.StartTimer()
+
+				go func(wg *sync.WaitGroup) {
+					defer wg.Done()
+					for i := 0; i < 5; i++ {
+						wgEnqueue.Add(1)
+						go func(wg *sync.WaitGroup) {
+							defer wg.Done()
+							q.BulkEnqueue(data)
+						}(&wgEnqueue)
+					}
+					wgEnqueue.Wait()
+					q.CloseQueue()
+				}(&wg)
+				go func(wg *sync.WaitGroup) {
+					defer wg.Done()
+					for {
+						ms, err := q.BulkDequeue(size, lazy)
+						if ringbuffer.IsErrQueueClose(err) {
+							q.CloseIndex()
+							return
+						} else {
+							if len(ms) > 0 {
+								q.UpdateIndex(ms[len(ms)-1])
+							}
+						}
+					}
+				}(&wg)
+				wg.Wait()
+				b.StopTimer()
+
+				os.RemoveAll(dir)
+			}
+		})
+	}
+}
+
+func BenchmarkGroupQueueEnqueueDequeue_5Group(b *testing.B) {
+	testQueues := []string{"queue1", "queue2", "queue3", "queue4", "queue5"}
 	for _, tt := range tests {
 		b.Run(fmt.Sprintf("Size%d", tt), func(b *testing.B) {
 			dir := fmt.Sprintf("testdata/benchmark/group_queue/single/%d/ffq", tt)
@@ -185,7 +304,6 @@ func BenchmarkGroupQueueEnqueueDequeue_3Group(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
-				total := len(data) * len(testQueues)
 				gq, _ := ringbuffer.NewGroupQueue[BenchmarkData](
 					"benchmark",
 					ringbuffer.WithFileDir(dir),
@@ -220,15 +338,10 @@ func BenchmarkGroupQueueEnqueueDequeue_3Group(b *testing.B) {
 						if err != nil {
 							if ringbuffer.IsErrQueueClose(err) {
 								gq.CloseIndex()
-								if gq.IsAllIndexClosed() {
-									gq.CloseIndex()
-									return
-								}
+								return
 							}
-						} else {
-							gq.UpdateIndex(m)
-							total--
 						}
+						gq.UpdateIndex(m)
 					}
 				}(&wg)
 				wg.Wait()
@@ -240,8 +353,8 @@ func BenchmarkGroupQueueEnqueueDequeue_3Group(b *testing.B) {
 	}
 }
 
-func BenchmarkGroupQueueBulkEnqueueDequeue_3Group(b *testing.B) {
-	testQueues := []string{"queue1", "queue2", "queue3"}
+func BenchmarkGroupQueueBulkEnqueueDequeue_5Group(b *testing.B) {
+	testQueues := []string{"queue1", "queue2", "queue3", "queue4", "queue5"}
 	size := 100
 	lazy := 10 * time.Millisecond
 	for _, tt := range tests {
@@ -251,7 +364,6 @@ func BenchmarkGroupQueueBulkEnqueueDequeue_3Group(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
-				total := len(data) * len(testQueues)
 				gq, _ := ringbuffer.NewGroupQueue[BenchmarkData](
 					"benchmark",
 					ringbuffer.WithFileDir(dir),
@@ -278,21 +390,18 @@ func BenchmarkGroupQueueBulkEnqueueDequeue_3Group(b *testing.B) {
 				}(&wg)
 				go func(wg *sync.WaitGroup) {
 					defer wg.Done()
-					for 0 < total {
+					for {
 						ms, err := gq.BulkDequeue(size, lazy)
-						for _, m := range ms {
-							gq.UpdateIndex(m)
-							gq.UpdateIndex(m)
-						}
-						total -= len(ms)
 						if err != nil {
 							if ringbuffer.IsErrQueueClose(err) {
 								gq.CloseIndex()
-								if gq.IsAllIndexClosed() {
-									return
-								}
+								return
 							}
 						}
+						for _, m := range ms {
+							gq.UpdateIndex(m)
+						}
+
 					}
 				}(&wg)
 				wg.Wait()

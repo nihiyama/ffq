@@ -10,6 +10,7 @@ type options struct {
 	maxPage   *uint64
 	groupSize *int
 	fileDir   *string
+	queueType *QueueType
 	encoder   *func(v any) ([]byte, error)
 	decoder   *func(data []byte, v any) error
 }
@@ -52,8 +53,8 @@ func WithFileDir(fileDir string) Option {
 //	q, err := NewQueue("myQueue", WithQueueSize(100))
 func WithQueueSize(size uint64) Option {
 	return func(options *options) error {
-		if size == 0 || (size&(size-1)) != 0 {
-			err := errors.New("queueSize must be set power of 2")
+		if size < 1 {
+			err := errors.New("queueSize must be set to greater than 0")
 			return errors.Join(ErrQueueOption, err)
 		}
 		options.size = &size
@@ -123,6 +124,13 @@ func WithDecoder(decoder func(data []byte, v any) error) Option {
 func WithGroupSize(size int) Option {
 	return func(options *options) error {
 		options.groupSize = &size
+		return nil
+	}
+}
+
+func WithQueueType(queueType QueueType) Option {
+	return func(options *options) error {
+		options.queueType = &queueType
 		return nil
 	}
 }
