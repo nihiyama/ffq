@@ -4,11 +4,9 @@ package ffq
 // Message represents an item in the queue with its associated metadata.
 // It contains information about the page, global index, local index, queue name, and the data itself.
 type Message[T any] struct {
-	page        int    // The page number where the message is stored.
-	globalIndex int    // The global index of the message in the queue.
-	localIndex  int    // The local index of the message within the page.
-	name        string // The name of the queue to which the message belongs.
-	data        *T     // The actual data of the message.
+	index uint64
+	name  string
+	item  *T
 }
 
 // Name returns the name of the queue to which the message belongs.
@@ -33,8 +31,8 @@ func (m *Message[T]) Name() string {
 //
 //	globalIdx, localIdx := message.Index()
 //	fmt.Printf("Global Index: %d, Local Index: %d\n", globalIdx, localIdx)
-func (m *Message[T]) Index() (int, int) {
-	return m.globalIndex, m.localIndex
+func (m *Message[T]) Index() uint64 {
+	return m.index
 }
 
 // Data returns the actual data contained in the message.
@@ -46,6 +44,6 @@ func (m *Message[T]) Index() (int, int) {
 //
 //	data := message.Data()
 //	fmt.Println("Message data:", data)
-func (m *Message[T]) Data() *T {
-	return m.data
+func (m *Message[T]) Item() *T {
+	return m.item
 }

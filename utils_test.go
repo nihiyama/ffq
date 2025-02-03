@@ -1,200 +1,143 @@
 package ffq
 
 import (
+	"encoding/binary"
 	"os"
-	"strings"
+	"path/filepath"
 	"testing"
 )
 
-func TestCreateQueueDir(t *testing.T) {
-	tests := []struct {
-		name        string
-		input       string
-		expect      string
-		afterRemove bool
-	}{
-		{
-			name:        "directory already exists",
-			input:       "testdata/utils/create_queue_dir/ffq",
-			expect:      "",
-			afterRemove: false,
-		},
-		{
-			name:        "directory does not exist",
-			input:       "testdata/utils/create_queue_dir/ffq_not_exist",
-			expect:      "",
-			afterRemove: true,
-		},
-		{
-			name:        "invalid directory name, stat error",
-			input:       string([]byte{0x00}),
-			expect:      "invalid argument",
-			afterRemove: false,
-		},
-		{
-			name:        "root manage directory, mkdir error",
-			input:       "/invalid_dir",
-			expect:      "permission denied",
-			afterRemove: false,
-		},
+func removeAll(dir string, t *testing.T) {
+	if r := recover(); r != nil {
+		t.Logf("panic occured, %v", r)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			actual := createQueueDir(tt.input)
-			if tt.afterRemove {
-				defer os.RemoveAll(tt.input)
-			}
-			if actual == nil {
-				if tt.expect != "" {
-					t.Fatalf("Failed test: %s, expect: %v, actual: %v", tt.name, tt.expect, actual)
-				}
-			} else {
-				if !strings.Contains(actual.Error(), tt.expect) {
-					t.Fatalf("Failed test: %s, expect: %v, actual: %v", tt.name, tt.expect, actual)
-				}
-			}
-		})
+	os.RemoveAll(dir)
+}
+
+func TestCreateQueueDir_alreadyExist(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ffqtest")
+	defer removeAll(dir, t)
+
+	err := createQueueDir(dir)
+	if err != nil {
+		t.Errorf("failed test: got is not nil, %v", err)
 	}
 }
 
-func TestOpenIndexFile(t *testing.T) {
-	tests := []struct {
-		name        string
-		input       string
-		expectedVal bool
-		expectedErr string
-		afterRemove bool
-	}{
-		{
-			name:        "index already exists",
-			input:       "testdata/utils/open_index_file/ffq/index",
-			expectedVal: true,
-			expectedErr: "",
-			afterRemove: false,
-		},
-		{
-			name:        "index not exists",
-			input:       "testdata/utils/open_index_file/ffq/index_new",
-			expectedVal: true,
-			expectedErr: "",
-			afterRemove: true,
-		},
-		{
-			name:        "index cannot create",
-			input:       "/root/index",
-			expectedVal: false,
-			expectedErr: "permission denied",
-			afterRemove: false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			actualVal, actualErr := openIndexFile(tt.input)
-			if actualVal != nil {
-				if !tt.expectedVal {
-					t.Fatalf("Failed test: %s, expectedVal: %v, actualVal: %v", tt.name, tt.expectedVal, actualVal)
-				}
-			} else {
-				if tt.expectedVal {
-					t.Fatalf("Failed test: %s, expectedVal: %v, actualVal: %v", tt.name, tt.expectedVal, actualVal)
-				}
-			}
-			if actualErr == nil {
-				if tt.expectedErr != "" {
-					t.Fatalf("Failed test: %s, expectedErr: %v, actualErr: %v", tt.name, tt.expectedErr, actualErr)
-				}
-			} else {
-				if !strings.Contains(actualErr.Error(), tt.expectedErr) {
-					t.Fatalf("Failed test: %s, expectedErr: %v, actualErr: %v", tt.name, tt.expectedErr, actualErr)
-				}
-			}
+func TestCreateQueueDir_notMkdirPermission(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ffqtest")
+	defer removeAll(dir, t)
 
-			if tt.afterRemove {
-				os.RemoveAll(tt.input)
-			}
-		})
+	os.Chmod(dir, 0400)
+	err := createQueueDir(filepath.Join(dir, "dir"))
+	if err == nil {
+		t.Errorf("failed test: got is not nil, %v", err)
 	}
 }
 
-func TestReadIndex(t *testing.T) {
-	tests := []struct {
-		name                   string
-		input                  string
-		expectedPage           int
-		expectedGlobalIndexVal int
-		expectedLocalIndexVal  int
-		expectedErr            string
-	}{
-		{
-			name:                   "file does not exist",
-			input:                  "testdata/utils/read_index/ffq/index_new",
-			expectedPage:           0,
-			expectedGlobalIndexVal: 0,
-			expectedLocalIndexVal:  0,
-			expectedErr:            "",
-		},
-		{
-			name:                   "file cannnot open invalid permission",
-			input:                  "testdata/utils/read_index/ffq/index_invalid_permission",
-			expectedPage:           0,
-			expectedGlobalIndexVal: 0,
-			expectedLocalIndexVal:  0,
-			expectedErr:            "permission denied",
-		},
-		{
-			name:                   "read from file",
-			input:                  "testdata/utils/read_index/ffq/index",
-			expectedPage:           0,
-			expectedGlobalIndexVal: 12345,
-			expectedLocalIndexVal:  54321,
-			expectedErr:            "",
-		},
-		{
-			name:                   "read from invalid short data",
-			input:                  "testdata/utils/read_index/ffq/index_invalid_eof",
-			expectedPage:           0,
-			expectedGlobalIndexVal: 0,
-			expectedLocalIndexVal:  0,
-			expectedErr:            "EOF",
-		},
-		{
-			name:                   "read from index that do not include globalIndex",
-			input:                  "testdata/utils/read_index/ffq/index_invalid_cannot_read_globalindex",
-			expectedPage:           0,
-			expectedGlobalIndexVal: 0,
-			expectedLocalIndexVal:  0,
-			expectedErr:            "EOF",
-		},
-		{
-			name:                   "read from index that do not include localIndex",
-			input:                  "testdata/utils/read_index/ffq/index_invalid_cannot_read_localindex",
-			expectedPage:           0,
-			expectedGlobalIndexVal: 12345,
-			expectedLocalIndexVal:  0,
-			expectedErr:            "EOF",
-		},
+func TestCreateQueueDir_notExist(t *testing.T) {
+	dir := filepath.Join(os.TempDir(), "dir")
+	defer removeAll(dir, t)
+
+	err := createQueueDir(dir)
+	if err != nil {
+		t.Errorf("failed test: got is not nil, %v", err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			actualPage, actualGlobalIndexVal, actualLocalIndexVal, actualErr := readIndex(tt.input)
-			if actualPage != tt.expectedPage {
-				t.Fatalf("Failed test: %s, expectedPage: %v, actualPage: %v", tt.name, tt.expectedPage, actualPage)
-			}
-			if actualGlobalIndexVal != tt.expectedGlobalIndexVal {
-				t.Fatalf("Failed test: %s, expectedGlobalIndexVal: %v, actualGlobalIndexVal: %v", tt.name, tt.expectedGlobalIndexVal, actualGlobalIndexVal)
-			}
-			if actualLocalIndexVal != tt.expectedLocalIndexVal {
-				t.Fatalf("Failed test: %s, expectedLocalIndexVal: %v, actualLocalIndexVal: %v", tt.name, tt.expectedLocalIndexVal, actualLocalIndexVal)
-			}
-			if actualErr == nil {
-				if tt.expectedErr != "" {
-					t.Fatalf("Failed test: %s, expectedErr: %v, actualErr: %v", tt.name, tt.expectedErr, actualErr)
-				}
-			} else {
-				if !strings.Contains(actualErr.Error(), tt.expectedErr) {
-					t.Fatalf("Failed test: %s, expectedErr: %v, actualErr: %v", tt.name, tt.expectedErr, actualErr)
-				}
-			}
-		})
+}
+
+func TestOpenIndexFile_alreadyExist(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ffqtest")
+	defer removeAll(dir, t)
+
+	indexFile, _ := os.CreateTemp(dir, "")
+	indexFile.Close()
+	_, err := openIndexFile(indexFile.Name())
+	if err != nil {
+		t.Errorf("failed test: got is not nil, %v", err)
+	}
+}
+
+func TestOpenIndexFile_notPermission(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ffqtest")
+	defer removeAll(dir, t)
+
+	indexFile, _ := os.CreateTemp(dir, "")
+	indexFile.Close()
+	os.Chmod(indexFile.Name(), 0200)
+
+	_, err := openIndexFile(indexFile.Name())
+	if err == nil {
+		t.Errorf("failed test: got is not nil, %v", err)
+	}
+}
+func TestOpenIndexFile_notExist(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ffqtest")
+	defer removeAll(dir, t)
+
+	_, err := openIndexFile(filepath.Join(dir, "index"))
+	if err != nil {
+		t.Errorf("failed test: got is not nil, %v", err)
+	}
+}
+
+func TestReadIndex_alreadyExist(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ffqtest")
+	defer removeAll(dir, t)
+
+	tmpFile, _ := os.CreateTemp(dir, "index")
+
+	var index uint64 = 12345678
+	buf := indexBufPool.Get().(*[8]byte)
+	binary.LittleEndian.PutUint64((*buf)[0:8], index)
+	tmpFile.Write((*buf)[:])
+	tmpFile.Close()
+
+	got := readIndex(tmpFile.Name())
+	if *got != index {
+		t.Errorf("failed test: got is not equal index, %d, %d", *got, index)
+	}
+}
+
+func TestReadIndex_notExist(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ffqtest")
+	defer removeAll(dir, t)
+
+	got := readIndex("index")
+	if got != nil {
+		t.Errorf("failed test: got is not nil, %d", *got)
+	}
+}
+
+func TestReadIndex_notPermission(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ffqtest")
+	defer removeAll(dir, t)
+
+	tmpFile, _ := os.CreateTemp(dir, "index")
+
+	var index uint64 = 12345678
+	buf := indexBufPool.Get().(*[8]byte)
+	binary.LittleEndian.PutUint64((*buf)[0:8], index)
+	tmpFile.Write((*buf)[:])
+	tmpFile.Close()
+	os.Chmod(tmpFile.Name(), 0200)
+
+	got := readIndex(tmpFile.Name())
+	if got != nil {
+		t.Errorf("failed test: got is not nil, %v", *got)
+	}
+}
+
+func TestReadIndex_notMatchPattern(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ffqtest")
+	defer removeAll(dir, t)
+
+	tmpFile, _ := os.CreateTemp(dir, "index")
+
+	tmpFile.Write([]byte("123456"))
+	tmpFile.Close()
+
+	got := readIndex(tmpFile.Name())
+	if got != nil {
+		t.Errorf("failed test: got is not nil, %v", *got)
 	}
 }

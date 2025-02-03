@@ -2,834 +2,1094 @@ package ffq
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 )
 
-func TestNewGroupQueue(t *testing.T) {
+func TestNewGroupQueue_withOptions(t *testing.T) {
+	tests := []struct {
+		name              string
+		opts              []Option
+		wantSize          uint64
+		wantMaxPage       uint64
+		wantQueueType     QueueType
+		wantExpectNoError bool
+	}{
+		{
+			name:              "no options",
+			opts:              nil,
+			wantSize:          1024,
+			wantMaxPage:       2,
+			wantExpectNoError: true,
+		},
+		{
+			name: "set all options",
+			opts: []Option{
+				WithQueueSize(10),
+				WithMaxPage(5),
+				WithEncoder(json.Marshal),
+				WithDecoder(json.Unmarshal),
+				WithQueueType(MPSC),
+				WithGroupSize(10),
+			},
+			wantSize:          10,
+			wantMaxPage:       5,
+			wantExpectNoError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir, _ := os.MkdirTemp("", "ffqtest")
+			defer removeAll(dir, t)
+
+			tt.opts = append(tt.opts, WithFileDir(dir))
+
+			gq, err := NewGroupQueue[TestData]("testQueue", tt.opts...)
+			if (err == nil) != tt.wantExpectNoError {
+				t.Errorf("unexpected error state: %v", err)
+			}
+			if err != nil {
+				return
+			}
+			defer gq.CloseQueue()
+			defer gq.CloseIndex()
+
+			gq.WaitInitialize()
+
+			if _, total := gq.Length(); total != 0 {
+				t.Errorf("new queue length should be 0, but got %d", total)
+			}
+
+			if gq.size != tt.wantSize {
+				t.Errorf("size got = %d, want = %d", gq.size, tt.wantSize)
+			}
+			if gq.maxPage != tt.wantMaxPage {
+				t.Errorf("maxPage got = %d, want = %d", gq.maxPage, tt.wantMaxPage)
+			}
+		})
+	}
+}
+
+func TestNewGroupQueue_withInitialize(t *testing.T) {
+	queueNames := []string{"0", "1", "2"}
+	var queueSize uint64 = 10
+	var maxPage uint64 = 2
+	var groupSize int = 3
+	tests := []struct {
+		name            string
+		enqueueNums     int
+		bulkEnqueueNums int
+		bulkSize        int
+		dequeueNums     int
+		wantTail        uint64
+		wantCurrentPage uint64
+	}{
+		{
+			name:            "no queue",
+			enqueueNums:     0,
+			bulkEnqueueNums: 0,
+			bulkSize:        0,
+			dequeueNums:     0,
+			wantTail:        0,
+			wantCurrentPage: 0,
+		},
+		{
+			name:            "with enqueue only",
+			enqueueNums:     5,
+			bulkEnqueueNums: 0,
+			bulkSize:        0,
+			dequeueNums:     0,
+			wantTail:        5,
+			wantCurrentPage: 0,
+		},
+		{
+			name:            "with enqueue and bulk enqueue",
+			enqueueNums:     3,
+			bulkEnqueueNums: 6,
+			bulkSize:        3,
+			dequeueNums:     0,
+			wantTail:        9,
+			wantCurrentPage: 0,
+		},
+		{
+			name:            "with file rotate",
+			enqueueNums:     5,
+			bulkEnqueueNums: 10,
+			bulkSize:        10,
+			dequeueNums:     8 * len(queueNames),
+			wantTail:        15,
+			wantCurrentPage: 1,
+		},
+		{
+			name:            "with page reset 0",
+			enqueueNums:     25,
+			bulkEnqueueNums: 0,
+			bulkSize:        0,
+			dequeueNums:     18 * len(queueNames),
+			wantTail:        5,
+			wantCurrentPage: 0,
+		},
+		{
+			name:            "just rotate round 1",
+			enqueueNums:     10,
+			bulkEnqueueNums: 0,
+			bulkSize:        0,
+			dequeueNums:     5 * len(queueNames),
+			wantTail:        10,
+			wantCurrentPage: 1,
+		},
+		{
+			name:            "just rotate round 2",
+			enqueueNums:     30,
+			bulkEnqueueNums: 0,
+			bulkSize:        0,
+			dequeueNums:     25 * len(queueNames),
+			wantTail:        10,
+			wantCurrentPage: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir, _ := os.MkdirTemp("", "ffqtest")
+			defer removeAll(dir, t)
+
+			gq, err := NewGroupQueue[TestData]("testQueue", WithFileDir(dir), WithQueueSize(queueSize), WithMaxPage(maxPage), WithGroupSize(groupSize))
+			if err != nil {
+				t.Errorf("unexpected error state: %v", err)
+				return
+			}
+
+			wantIndexMap := map[string]uint64{}
+
+			// preparation
+			var ewg sync.WaitGroup
+			var dwg sync.WaitGroup
+			dwg.Add(1)
+			go func(wg *sync.WaitGroup) {
+				defer wg.Done()
+				for i := 0; i < tt.dequeueNums; i++ {
+					m, err := gq.Dequeue()
+					if err != nil {
+						t.Errorf("unexpected error state: %v", err)
+					}
+					gq.UpdateIndex(m)
+					wantIndexMap[m.Name()] = m.Index()
+				}
+			}(&dwg)
+
+			gq.WaitInitialize()
+
+			// for enqueue
+			for _, qn := range queueNames {
+				ewg.Add(1)
+				go func(wg *sync.WaitGroup, qn string) {
+					defer wg.Done()
+					for i := 0; i < tt.enqueueNums; i++ {
+						err := gq.Enqueue(qn, &TestData{Value: i})
+						if err != nil {
+							t.Errorf("unexpected error state: %v", err)
+						}
+						// Forcing the file to sleep and other queues
+						// because the process is too fast and the file time does not change.
+						time.Sleep(20 * time.Millisecond)
+					}
+					for i := 0; i < tt.bulkEnqueueNums; i += tt.bulkSize {
+						items := createBulkData(i, tt.bulkSize)
+						err := gq.BulkEnqueue(qn, items)
+						if err != nil {
+							t.Errorf("unexpected error state: %v", err)
+						}
+						// Forcing the file to sleep and other queues
+						// because the process is too fast and the file time does not change.
+						time.Sleep(20 * time.Millisecond)
+					}
+				}(&ewg, qn)
+			}
+
+			ewg.Wait()
+			err = gq.CloseQueue()
+			if err != nil {
+				t.Errorf("unexpected error state: %v", err)
+				return
+			}
+			dwg.Wait()
+			err = gq.CloseIndex()
+			if err != nil {
+				t.Errorf("unexpected error state: %v", err)
+				return
+			}
+
+			for _, qn := range queueNames {
+				index := readIndex(filepath.Join(dir, qn, indexFilename))
+				if tt.dequeueNums == 0 && index != nil {
+					t.Errorf("index got is not nil, %d", *index)
+				}
+				if tt.dequeueNums > 0 && *index != wantIndexMap[qn] {
+					t.Errorf("index got = %d, want = %d", *index, wantIndexMap[qn])
+				}
+			}
+
+			gq, err = NewGroupQueue[TestData]("testQueue", WithFileDir(dir), WithQueueSize(uint64(queueSize)), WithMaxPage(uint64(maxPage)))
+			if err != nil {
+				t.Errorf("unexpected error state: %v", err)
+				return
+			}
+			gq.WaitInitialize()
+
+			for _, qn := range queueNames {
+				q, err := gq.getQueue(qn)
+				if err != nil {
+					// no enqueue
+					continue
+				}
+				if q.currentPage != tt.wantCurrentPage {
+					t.Errorf("currentPage got = %d, want = %d", q.currentPage, tt.wantCurrentPage)
+				}
+				if q.tail != tt.wantTail {
+					t.Errorf("%s tail got = %d, want = %d", qn, q.tail, tt.wantTail)
+				}
+			}
+
+			gq.CloseQueue()
+			gq.CloseIndex()
+		})
+	}
+}
+
+func TestGroupEnqueue(t *testing.T) {
+	queueNames := []string{"0", "1", "2"}
+	var queueSize uint64 = 10
+	var maxPage uint64 = 2
+	var groupSize int = 3
 	tests := []struct {
 		name        string
-		fileDir     string
-		queueSize   int
-		maxPages    int
-		encoder     func(v any) ([]byte, error)
-		decoder     func(data []byte, v any) error
-		afterRemove bool
+		enqueueNums int
+		dequeueNums int
+		wantTail    uint64
 	}{
 		{
-			name:        "exist queue",
-			fileDir:     "testdata/group_queue/new_queue/ffq",
-			queueSize:   5,
-			maxPages:    3,
-			encoder:     json.Marshal,
-			decoder:     json.Unmarshal,
-			afterRemove: false,
+			name:        "simple enqueue",
+			enqueueNums: 8,
+			dequeueNums: 0 * len(queueNames),
+			wantTail:    8,
 		},
 		{
-			name:        "new queue",
-			fileDir:     "testdata/group_queue/new_queue/ffq_new",
-			queueSize:   5,
-			maxPages:    3,
-			encoder:     json.Marshal,
-			decoder:     json.Unmarshal,
-			afterRemove: true,
-		},
-	}
-
-	type Data struct{}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.afterRemove {
-				defer os.RemoveAll(tt.fileDir)
-			}
-			actual, _ := NewGroupQueue[Data]("testQueue",
-				WithFileDir(tt.fileDir),
-				WithQueueSize(tt.queueSize),
-				WithMaxPages(tt.maxPages),
-				WithEncoder(tt.encoder),
-				WithDecoder(tt.decoder),
-			)
-
-			if tt.queueSize != actual.queueSize {
-				t.Errorf("Failed test: queueSize, expect: %v, actual: %v", tt.queueSize, actual.queueSize)
-			}
-			if tt.maxPages != actual.maxPages {
-				t.Errorf("Failed test: maxPages, expect: %v, actual: %v", tt.maxPages, actual.maxPages)
-			}
-			if tt.fileDir != actual.fileDir {
-				t.Errorf("Failed test: fileDir, expect: %v, actual: %v", tt.fileDir, actual.fileDir)
-			}
-
-			// wait initialize
-			actual.WaitInitialize()
-
-			if err := actual.CloseQueue(); err != nil {
-				t.Errorf("CloseQueue failed: %v", err)
-			}
-			if err := actual.CloseIndex(); err != nil {
-				t.Errorf("CloseIndex failed: %v", err)
-			}
-		})
-	}
-}
-
-func TestNewGroupQueue_initialize(t *testing.T) {
-	tests := []struct {
-		name                  string
-		fileDir               string
-		queueSize             int
-		maxPages              int
-		enqueNum              int
-		beforeDequeueNum      int
-		expectHeadGlobalIndex int
-		expectCurrentPage     int
-		encoder               func(v any) ([]byte, error)
-		decoder               func(data []byte, v any) error
-		afterRemove           bool
-	}{
-		{
-			name:                  "restart",
-			fileDir:               "testdata/group_queue/new_queue/ffq_initialize_restart",
-			queueSize:             5,
-			maxPages:              3,
-			enqueNum:              4,
-			beforeDequeueNum:      3,
-			expectHeadGlobalIndex: 4,
-			expectCurrentPage:     0,
-			encoder:               json.Marshal,
-			decoder:               json.Unmarshal,
-			afterRemove:           true,
+			name:        "with file rotate",
+			enqueueNums: 15,
+			dequeueNums: 8 * len(queueNames),
+			wantTail:    15,
 		},
 		{
-			name:                  "next page",
-			fileDir:               "testdata/group_queue/new_queue/ffq_initialize_next_page",
-			queueSize:             5,
-			maxPages:              3,
-			enqueNum:              5,
-			beforeDequeueNum:      3,
-			expectHeadGlobalIndex: 0,
-			expectCurrentPage:     1,
-			encoder:               json.Marshal,
-			decoder:               json.Unmarshal,
-			afterRemove:           true,
+			name:        "tail reset 0",
+			enqueueNums: 25,
+			dequeueNums: 18 * len(queueNames),
+			wantTail:    5,
 		},
-		{
-			name:                  "file rotate",
-			fileDir:               "testdata/group_queue/new_queue/ffq_initialize_file_rotate",
-			queueSize:             5,
-			maxPages:              3,
-			enqueNum:              7,
-			beforeDequeueNum:      3,
-			expectHeadGlobalIndex: 2,
-			expectCurrentPage:     1,
-			encoder:               json.Marshal,
-			decoder:               json.Unmarshal,
-			afterRemove:           true,
-		},
-		{
-			name:                  "equal max page",
-			fileDir:               "testdata/group_queue/new_queue/ffq_initialize_equal_max_page",
-			queueSize:             5,
-			maxPages:              3,
-			enqueNum:              15,
-			beforeDequeueNum:      13,
-			expectHeadGlobalIndex: 0,
-			expectCurrentPage:     0,
-			encoder:               json.Marshal,
-			decoder:               json.Unmarshal,
-			afterRemove:           true,
-		},
-		{
-			name:                  "over max page",
-			fileDir:               "testdata/group_queue/new_queue/ffq_initialize_over_max_page",
-			queueSize:             5,
-			maxPages:              3,
-			enqueNum:              16,
-			beforeDequeueNum:      13,
-			expectHeadGlobalIndex: 1,
-			expectCurrentPage:     0,
-			encoder:               json.Marshal,
-			decoder:               json.Unmarshal,
-			afterRemove:           true,
-		},
-	}
-
-	type Data struct {
-		Value int
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.afterRemove {
-				defer os.RemoveAll(tt.fileDir)
+			dir, _ := os.MkdirTemp("", "ffqtest")
+			defer removeAll(dir, t)
+
+			gq, err := NewGroupQueue[TestData]("testQueue", WithFileDir(dir), WithQueueSize(queueSize), WithMaxPage(maxPage), WithGroupSize(groupSize))
+			if err != nil {
+				t.Errorf("unexpected error state: %v", err)
+				return
 			}
-			bgq, _ := NewGroupQueue[Data]("testQueue",
-				WithFileDir(tt.fileDir),
-				WithQueueSize(tt.queueSize),
-				WithMaxPages(tt.maxPages),
-				WithEncoder(tt.encoder),
-				WithDecoder(tt.decoder),
-			)
 
-			// prepare data
-			bgq.WaitInitialize()
+			var ewg sync.WaitGroup
+			var dwg sync.WaitGroup
 
-			var wg sync.WaitGroup
-			wg.Add(1)
-			go func() {
-				for i := 0; i < tt.enqueNum; i++ {
-					bgq.Enqueue("test", &Data{Value: i})
-				}
-				bgq.CloseQueue()
-				wg.Done()
-			}()
-
-			j := 0
-			for {
-				if j >= tt.beforeDequeueNum {
-					break
-				}
-				ms, _ := bgq.Dequeue()
-				for m := range ms {
-					bgq.UpdateIndex(m)
-					j++
-				}
-			}
-			bgq.CloseIndex()
-			wg.Wait()
-			agq, _ := NewGroupQueue[Data]("testQueue",
-				WithFileDir(tt.fileDir),
-				WithQueueSize(tt.queueSize),
-				WithMaxPages(tt.maxPages),
-				WithEncoder(tt.encoder),
-				WithDecoder(tt.decoder),
-			)
-
-			for {
-				if j == tt.enqueNum {
-					break
-				}
-				ms, _ := agq.Dequeue()
-				for m := range ms {
-					if m.Data().Value != j {
-						t.Errorf("Failed test: data, expect: %d, actual: %d", j, m.Data().Value)
+			dwg.Add(1)
+			go func(wg *sync.WaitGroup) {
+				defer wg.Done()
+				for i := 0; i < tt.dequeueNums; i++ {
+					m, err := gq.Dequeue()
+					if err != nil {
+						t.Errorf("unexpected error state: %v", err)
 					}
-					gi, li := m.Index()
-					if gi != j%tt.queueSize {
-						t.Errorf("Failed test: globalIndex, expect: %d, actual: %d", j%tt.queueSize, gi)
-					}
-					if li != 0 {
-						t.Errorf("Failed test: localIndex, expect: 0, actual: %d", li)
-					}
-					agq.UpdateIndex(m)
-					j++
+					gq.UpdateIndex(m)
 				}
-			}
-			agq.WaitInitialize()
-			if agq.queues["test"].currentPage != tt.expectCurrentPage {
-				t.Errorf("Failed test: page, expect: %d, actual: %d", tt.expectCurrentPage, agq.queues["test"].currentPage)
-			}
-			if agq.queues["test"].headGlobalIndex != tt.expectHeadGlobalIndex {
-				t.Errorf("Failed test: globalIndex, expect: %d, actual: %d", tt.expectHeadGlobalIndex, agq.queues["test"].headGlobalIndex)
-			}
-		})
-	}
-}
-
-func TestGQEnqueueDequeue(t *testing.T) {
-	type Data struct {
-		Value int
-	}
-	tests := []struct {
-		name            string
-		enqueueData     []*Data
-		expectedDequeue []*Data
-	}{
-		{
-			name: "group enqueue and dequeue",
-			enqueueData: []*Data{
-				{Value: 1},
-				{Value: 2},
-				{Value: 3},
-				{Value: 4},
-				{Value: 5},
-				{Value: 6},
-				{Value: 7},
-				{Value: 8},
-				{Value: 9},
-				{Value: 10},
-				{Value: 11},
-				{Value: 12},
-				{Value: 13},
-				{Value: 14},
-				{Value: 15},
-			},
-			expectedDequeue: []*Data{
-				{Value: 1},
-				{Value: 2},
-				{Value: 3},
-				{Value: 4},
-				{Value: 5},
-				{Value: 6},
-				{Value: 7},
-				{Value: 8},
-				{Value: 9},
-				{Value: 10},
-				{Value: 11},
-				{Value: 12},
-				{Value: 13},
-				{Value: 14},
-				{Value: 15},
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			dir := "testdata/group_queue/enqueue_dequeue/ffq"
-			defer os.RemoveAll(dir)
-
-			queueSize := 5
-			maxPages := 2
-			encoder := json.Marshal
-			decoder := json.Unmarshal
-
-			gq, err := NewGroupQueue[Data](
-				"testQueue",
-				WithFileDir(dir),
-				WithQueueSize(queueSize),
-				WithMaxPages(maxPages),
-				WithEncoder(encoder),
-				WithDecoder(decoder),
-			)
+			}(&dwg)
 
 			gq.WaitInitialize()
 
-			if err != nil {
-				t.Fatalf("failed to create queue: %v", err)
+			testData := make([]*TestData, 0, tt.enqueueNums)
+			for i := 0; i < tt.enqueueNums; i++ {
+				testData = append(testData, &TestData{Value: i})
+			}
+			queuedData := sync.Map{}
+			for _, qn := range queueNames {
+				qd := make([]*TestData, 0, tt.enqueueNums)
+				queuedData.Store(qn, qd)
 			}
 
-			var wg sync.WaitGroup
-			wg.Add(1)
-			go func(wg *sync.WaitGroup) {
-				var err error
-				defer wg.Done()
-				for _, data := range tt.enqueueData {
-					err := gq.Enqueue("queue1", data)
-					if err != nil {
-						t.Errorf("enqueue failed: %v", err)
-					}
-				}
-				for _, data := range tt.enqueueData {
-					err := gq.Enqueue("queue2", data)
-					if err != nil {
-						t.Errorf("enqueue failed: %v", err)
-					}
-				}
-				for _, data := range tt.enqueueData {
-					err := gq.Enqueue("queue3", data)
-					if err != nil {
-						t.Errorf("enqueue failed: %v", err)
-					}
-				}
-				err = gq.CloseQueue()
-				if err != nil {
-					t.Errorf("failed to close queue: %v", err)
-				}
-			}(&wg)
-
-			wg.Add(1)
-			go func(wg *sync.WaitGroup) {
-				var err error
-				var messages chan *Message[Data]
-				defer wg.Done()
-				i := 0
-				for {
-					messages, err = gq.Dequeue()
-					if err != nil {
-						if IsErrQueueClose(err) {
-							err = gq.CloseIndex()
+			for _, qn := range queueNames {
+				ewg.Add(1)
+				go func(wg *sync.WaitGroup, qn string) {
+					defer wg.Done()
+					var currentPage uint64 = 0
+					for i, d := range testData {
+						err := gq.Enqueue(qn, d)
+						if err != nil {
+							t.Errorf("unexpected error state: %v", err)
+						}
+						// Forcing the file to sleep and other queues
+						// because the process is too fast and the file time does not change.
+						time.Sleep(20 * time.Millisecond)
+						q, _ := gq.getQueue(qn)
+						if currentPage != q.currentPage || (i+1) == tt.enqueueNums {
+							f, err := os.Open(filepath.Join(dir, qn, fmt.Sprintf("%s.%d", queueFilename, currentPage)))
 							if err != nil {
-								t.Errorf("Failed to close index: %v", err)
+								t.Errorf("unexpected error state: %v", err)
 							}
-							break
-						} else {
-							t.Errorf("dequeue failed: %v", err)
+							items, err := readQueueFile(f)
+							if err != nil {
+								t.Errorf("unexpected error state: %v", err)
+							}
+							qd, _ := queuedData.Load(qn)
+							qd = append(qd.([]*TestData), items...)
+							queuedData.Store(qn, qd)
+							currentPage++
+							if currentPage == maxPage {
+								currentPage = 0
+							}
 						}
 					}
-					for m := range messages {
-						m.Data()
-						m.Index()
-						m.Name()
+				}(&ewg, qn)
+			}
+
+			ewg.Wait()
+			err = gq.CloseQueue()
+			if err != nil {
+				t.Errorf("unexpected error state: %v", err)
+				return
+			}
+			dwg.Wait()
+			err = gq.CloseIndex()
+			if err != nil {
+				t.Errorf("unexpected error state: %v", err)
+				return
+			}
+
+			for _, qn := range queueNames {
+				q, err := gq.getQueue(qn)
+				if err != nil {
+					// no enqueue
+					continue
+				}
+				if q.tail != tt.wantTail {
+					t.Errorf("tail got = %d, want = %d", q.tail, tt.wantTail)
+				}
+				qdAny, _ := queuedData.Load(qn)
+				qd := qdAny.([]*TestData)
+				if len(qd) != len(testData) {
+					t.Errorf("queued length got = %d, want = %d", len(qd), len(testData))
+				}
+				for i := 0; i < tt.enqueueNums; i++ {
+					if *qd[i] != *testData[i] {
+						t.Errorf("queued data got = %v, want = %v", qd[i], testData[i])
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestGroupBulkEnqueue(t *testing.T) {
+	queueNames := []string{"0", "1", "2"}
+	var queueSize uint64 = 10
+	var maxPage uint64 = 2
+	var groupSize int = 3
+	tests := []struct {
+		name        string
+		enqueueNums int
+		bulkSize    int
+		dequeueNums int
+		wantTail    uint64
+	}{
+		{
+			name:        "simple enqueue",
+			enqueueNums: 8,
+			bulkSize:    5,
+			dequeueNums: 0 * len(queueNames),
+			wantTail:    8,
+		},
+		{
+			name:        "with file rotate",
+			enqueueNums: 15,
+			bulkSize:    7,
+			dequeueNums: 8 * len(queueNames),
+			wantTail:    15,
+		},
+		{
+			name:        "tail reset 0",
+			enqueueNums: 25,
+			bulkSize:    12,
+			dequeueNums: 18 * len(queueNames),
+			wantTail:    5,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir, _ := os.MkdirTemp("", "ffqtest")
+			defer removeAll(dir, t)
+
+			gq, err := NewGroupQueue[TestData]("testQueue", WithFileDir(dir), WithQueueSize(queueSize), WithMaxPage(maxPage), WithGroupSize(groupSize))
+			if err != nil {
+				t.Errorf("unexpected error state: %v", err)
+				return
+			}
+
+			var ewg sync.WaitGroup
+			var dwg sync.WaitGroup
+			dwg.Add(1)
+			go func(wg *sync.WaitGroup) {
+				defer wg.Done()
+				for i := 0; i < tt.dequeueNums; i++ {
+					m, err := gq.Dequeue()
+					if err != nil {
+						t.Errorf("unexpected error state: %v", err)
+					}
+					gq.UpdateIndex(m)
+				}
+			}(&dwg)
+
+			gq.WaitInitialize()
+
+			testData := make([]*TestData, 0, tt.enqueueNums)
+			for i := 0; i < tt.enqueueNums; i++ {
+				testData = append(testData, &TestData{Value: i})
+			}
+			queuedData := sync.Map{}
+			for _, qn := range queueNames {
+				qd := make([]*TestData, 0, tt.enqueueNums)
+				queuedData.Store(qn, qd)
+			}
+
+			for _, qn := range queueNames {
+				ewg.Add(1)
+				go func(wg *sync.WaitGroup, qn string) {
+					defer wg.Done()
+					var currentPage uint64 = 0
+					bulkTestData := []*TestData{}
+					for i, d := range testData {
+						bulkTestData = append(bulkTestData, d)
+						if lbt := len(bulkTestData); lbt != 0 && !(lbt%tt.bulkSize == 0 || (i+1) == tt.enqueueNums) {
+							continue
+						}
+						err := gq.BulkEnqueue(qn, bulkTestData)
+						bulkTestData = []*TestData{}
+						if err != nil {
+							t.Errorf("unexpected error state: %v", err)
+						}
+						// Forcing the file to sleep and other queues
+						// because the process is too fast and the file time does not change.
+						time.Sleep(20 * time.Millisecond)
+						q, _ := gq.getQueue(qn)
+						if currentPage != q.currentPage || (i+1) == tt.enqueueNums {
+							f, err := os.Open(filepath.Join(dir, qn, fmt.Sprintf("%s.%d", queueFilename, currentPage)))
+							if err != nil {
+								t.Errorf("unexpected error state: %v", err)
+							}
+							items, err := readQueueFile(f)
+							if err != nil {
+								t.Errorf("unexpected error state: %v", err)
+							}
+							qd, _ := queuedData.Load(qn)
+							qd = append(qd.([]*TestData), items...)
+							queuedData.Store(qn, qd)
+							currentPage++
+							if currentPage == maxPage {
+								currentPage = 0
+							}
+						}
+					}
+				}(&ewg, qn)
+			}
+
+			ewg.Wait()
+			err = gq.CloseQueue()
+			if err != nil {
+				t.Errorf("unexpected error state: %v", err)
+				return
+			}
+			dwg.Wait()
+			err = gq.CloseIndex()
+			if err != nil {
+				t.Errorf("unexpected error state: %v", err)
+				return
+			}
+
+			for _, qn := range queueNames {
+				q, err := gq.getQueue(qn)
+				if err != nil {
+					// no enqueue
+					continue
+				}
+				if q.tail != tt.wantTail {
+					t.Errorf("tail got = %d, want = %d", q.tail, tt.wantTail)
+				}
+				qdAny, _ := queuedData.Load(qn)
+				qd := qdAny.([]*TestData)
+				if len(qd) != len(testData) {
+					t.Errorf("queued length got = %d, want = %d", len(qd), len(testData))
+				}
+				for i := 0; i < tt.enqueueNums; i++ {
+					if *qd[i] != *testData[i] {
+						t.Errorf("queued data got = %v, want = %v", qd[i], testData[i])
+					}
+				}
+			}
+		})
+
+	}
+}
+
+func TestGroupDequeue(t *testing.T) {
+	queueNames := []string{"0", "1", "2"}
+	var queueSize uint64 = 10
+	var maxPage uint64 = 2
+	var groupSize int = 3
+	tests := []struct {
+		name        string
+		enqueueNums int
+	}{
+		{
+			name:        "simple dequeue",
+			enqueueNums: 15,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir, _ := os.MkdirTemp("", "ffqtest")
+			defer removeAll(dir, t)
+
+			gq, err := NewGroupQueue[TestData]("testQueue", WithFileDir(dir), WithQueueSize(queueSize), WithMaxPage(maxPage), WithGroupSize(groupSize))
+			if err != nil {
+				t.Errorf("unexpected error state: %v", err)
+				return
+			}
+
+			testData := make([]*TestData, 0, tt.enqueueNums)
+			for i := 0; i < tt.enqueueNums; i++ {
+				testData = append(testData, &TestData{Value: i})
+			}
+
+			var ewg sync.WaitGroup
+			var dwg sync.WaitGroup
+			dwg.Add(1)
+			go func(wg *sync.WaitGroup) {
+				defer wg.Done()
+				for {
+					m, err := gq.Dequeue()
+					if err != nil {
+						if IsErrQueueClose(err) {
+							break
+						}
+						t.Errorf("unexpected error state: %v", err)
+					}
+					gq.UpdateIndex(m)
+					q, err := gq.getQueue(m.Name())
+					if err != nil {
+						t.Errorf("unexpected error state: %v", err)
+					}
+					index := readIndex(q.indexFile.Name())
+					if *index != uint64(m.Index()) {
+						t.Errorf("index got = %d, want = %d", *index, m.Index())
+					}
+				}
+			}(&dwg)
+
+			gq.WaitInitialize()
+
+			for _, qn := range queueNames {
+				ewg.Add(1)
+				go func(wg *sync.WaitGroup, qn string) {
+					defer wg.Done()
+					for _, d := range testData {
+						err := gq.Enqueue(qn, d)
+						if err != nil {
+							t.Errorf("unexpected error state: %v", err)
+						}
+						// Forcing the file to sleep and other queues
+						// because the process is too fast and the file time does not change.
+						time.Sleep(20 * time.Millisecond)
+					}
+				}(&ewg, qn)
+			}
+
+			ewg.Wait()
+			err = gq.CloseQueue()
+			if err != nil {
+				t.Errorf("unexpected error state: %v", err)
+				return
+			}
+			dwg.Wait()
+			err = gq.CloseIndex()
+			if err != nil {
+				t.Errorf("unexpected error state: %v", err)
+				return
+			}
+		})
+	}
+}
+
+func TestGroupBulkDequeue(t *testing.T) {
+	queueNames := []string{"0", "1", "2"}
+	var queueSize uint64 = 10
+	var maxPage uint64 = 2
+	var groupSize int = 3
+	tests := []struct {
+		name        string
+		enqueueNums int
+		size        uint64
+		lazy        time.Duration
+	}{
+		{
+			name:        "simple dequeue",
+			enqueueNums: 8,
+			size:        uint64(5),
+			lazy:        1 * time.Millisecond,
+		},
+		{
+			name:        "reach size",
+			enqueueNums: 15,
+			size:        uint64(7),
+			lazy:        300 * time.Millisecond,
+		},
+		{
+			name:        "reach timer",
+			enqueueNums: 10,
+			size:        uint64(10),
+			lazy:        5 * time.Nanosecond,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir, _ := os.MkdirTemp("", "ffqtest")
+			defer removeAll(dir, t)
+
+			gq, err := NewGroupQueue[TestData]("testQueue", WithFileDir(dir), WithQueueSize(queueSize), WithMaxPage(maxPage), WithGroupSize(groupSize))
+			if err != nil {
+				t.Errorf("unexpected error state: %v", err)
+				return
+			}
+
+			testData := make([]*TestData, 0, tt.enqueueNums)
+			for i := 0; i < tt.enqueueNums; i++ {
+				testData = append(testData, &TestData{Value: i})
+			}
+
+			var ewg sync.WaitGroup
+			var dwg sync.WaitGroup
+			dwg.Add(1)
+			go func(wg *sync.WaitGroup) {
+				defer wg.Done()
+				for {
+					ms, err := gq.BulkDequeue(tt.size, tt.lazy)
+					if err != nil {
+						if IsErrQueueClose(err) {
+							break
+						}
+						t.Errorf("unexpected error state: %v", err)
+					}
+					for _, m := range ms {
 						gq.UpdateIndex(m)
-						i++
+						q, err := gq.getQueue(m.Name())
+						if err != nil {
+							t.Errorf("unexpected error state: %v", err)
+						}
+						index := readIndex(q.indexFile.Name())
+						if *index != uint64(m.Index()) {
+							t.Errorf("index got = %d, want = %d", *index, m.Index())
+						}
 					}
 				}
-			}(&wg)
-			wg.Wait()
+			}(&dwg)
+
+			gq.WaitInitialize()
+
+			for _, qn := range queueNames {
+				ewg.Add(1)
+				go func(wg *sync.WaitGroup, qn string) {
+					defer wg.Done()
+					for _, d := range testData {
+						err := gq.Enqueue(qn, d)
+						if err != nil {
+							t.Errorf("unexpected error state: %v", err)
+						}
+						// Forcing the file to sleep and other queues
+						// because the process is too fast and the file time does not change.
+						time.Sleep(20 * time.Millisecond)
+					}
+				}(&ewg, qn)
+			}
+
+			ewg.Wait()
+			err = gq.CloseQueue()
+			if err != nil {
+				t.Errorf("unexpected error state: %v", err)
+				return
+			}
+			dwg.Wait()
+			err = gq.CloseIndex()
+			if err != nil {
+				t.Errorf("unexpected error state: %v", err)
+				return
+			}
+
 		})
 	}
 }
 
-func TestGQEnqueueDequeueWithFunc(t *testing.T) {
-	type Data struct {
-		Value int
+func TestGroupFuncAfterDequeue(t *testing.T) {
+	queueNames := []string{"0", "1", "2"}
+	var queueSize uint64 = 10
+	var maxPage uint64 = 2
+	var groupSize int = 3
+
+	normalF := func(td *TestData) error {
+		return nil
 	}
+	errorF := func(td *TestData) error {
+		return fmt.Errorf("error")
+	}
+
 	tests := []struct {
-		name            string
-		enqueueData     []*Data
-		expectedDequeue []*Data
+		name        string
+		enqueueNums int
+		f           func(*TestData) error
 	}{
 		{
-			name: "group enqueue and dequeue",
-			enqueueData: []*Data{
-				{Value: 1},
-				{Value: 2},
-				{Value: 3},
-				{Value: 4},
-				{Value: 5},
-				{Value: 6},
-				{Value: 7},
-				{Value: 8},
-				{Value: 9},
-				{Value: 10},
-				{Value: 11},
-				{Value: 12},
-				{Value: 13},
-				{Value: 14},
-				{Value: 15},
-			},
-			expectedDequeue: []*Data{
-				{Value: 1},
-				{Value: 2},
-				{Value: 3},
-				{Value: 4},
-				{Value: 5},
-				{Value: 6},
-				{Value: 7},
-				{Value: 8},
-				{Value: 9},
-				{Value: 10},
-				{Value: 11},
-				{Value: 12},
-				{Value: 13},
-				{Value: 14},
-				{Value: 15},
-			},
+			name:        "simple dequeue",
+			enqueueNums: 8,
+			f:           normalF,
+		},
+		{
+			name:        "func error",
+			enqueueNums: 8,
+			f:           errorF,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir, _ := os.MkdirTemp("", "ffqtest")
+			defer removeAll(dir, t)
+
+			gq, err := NewGroupQueue[TestData]("testQueue", WithFileDir(dir), WithQueueSize(queueSize), WithMaxPage(maxPage), WithGroupSize(groupSize))
+			if err != nil {
+				t.Errorf("unexpected error state: %v", err)
+				return
+			}
+
+			testData := make([]*TestData, 0, tt.enqueueNums)
+			for i := 0; i < tt.enqueueNums; i++ {
+				testData = append(testData, &TestData{Value: i})
+			}
+
+			var ewg sync.WaitGroup
+			var dwg sync.WaitGroup
+			dwg.Add(1)
+			go func(wg *sync.WaitGroup) {
+				defer wg.Done()
+				for {
+					err := gq.FuncAfterDequeue(tt.f)
+					if tt.name == "func error" {
+						// nothing to do
+						break
+					} else {
+						if err != nil {
+							if IsErrQueueClose(err) {
+								break
+							}
+							t.Errorf("unexpected error state: %v", err)
+						}
+					}
+				}
+			}(&dwg)
+
+			gq.WaitInitialize()
+
+			for _, qn := range queueNames {
+				ewg.Add(1)
+				go func(wg *sync.WaitGroup, qn string) {
+					defer wg.Done()
+					for _, d := range testData {
+						err := gq.Enqueue(qn, d)
+						if err != nil {
+							t.Errorf("unexpected error state: %v", err)
+						}
+						// Forcing the file to sleep and other queues
+						// because the process is too fast and the file time does not change.
+						time.Sleep(20 * time.Millisecond)
+					}
+				}(&ewg, qn)
+			}
+
+			ewg.Wait()
+			err = gq.CloseQueue()
+			if err != nil {
+				t.Errorf("unexpected error state: %v", err)
+				return
+			}
+			dwg.Wait()
+			err = gq.CloseIndex()
+			if err != nil {
+				t.Errorf("unexpected error state: %v", err)
+				return
+			}
+
+			if tt.name != "func error" {
+				for _, qn := range queueNames {
+					index := readIndex(filepath.Join(dir, qn, indexFilename))
+					if want := uint64(tt.enqueueNums - 1); *index != want {
+						t.Errorf("index got = %d, want = %d", *index, want)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestGroupFuncAfterBulkDequeue(t *testing.T) {
+	queueNames := []string{"0", "1", "2"}
+	var queueSize uint64 = 10
+	var maxPage uint64 = 2
+	var groupSize int = 3
+
+	normalF := func(td []*TestData) error {
+		return nil
+	}
+	errorF := func(td []*TestData) error {
+		return fmt.Errorf("error")
+	}
+
+	tests := []struct {
+		name        string
+		enqueueNums int
+		size        uint64
+		lazy        time.Duration
+		f           func([]*TestData) error
+	}{
+		{
+			name:        "simple dequeue",
+			enqueueNums: 8,
+			size:        uint64(5),
+			lazy:        1 * time.Millisecond,
+			f:           normalF,
+		},
+		{
+			name:        "reach size",
+			enqueueNums: 8,
+			size:        uint64(5),
+			lazy:        300 * time.Millisecond,
+			f:           normalF,
+		},
+		{
+			name:        "reach timer",
+			enqueueNums: 8,
+			size:        uint64(10),
+			lazy:        5 * time.Nanosecond,
+			f:           normalF,
+		},
+		{
+			name:        "func error",
+			enqueueNums: 8,
+			size:        uint64(5),
+			lazy:        1 * time.Millisecond,
+			f:           errorF,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dir := "testdata/group_queue/enqueue_dequeue_with_func/ffq"
-			defer os.RemoveAll(dir)
+			dir, _ := os.MkdirTemp("", "ffqtest")
+			defer removeAll(dir, t)
 
-			queueSize := 5
-			maxPages := 2
-			encoder := json.Marshal
-			decoder := json.Unmarshal
-
-			gq, err := NewGroupQueue[Data](
-				"testQueue",
-				WithFileDir(dir),
-				WithQueueSize(queueSize),
-				WithMaxPages(maxPages),
-				WithEncoder(encoder),
-				WithDecoder(decoder),
-			)
-
-			gq.WaitInitialize()
-
+			gq, err := NewGroupQueue[TestData]("testQueue", WithFileDir(dir), WithQueueSize(queueSize), WithMaxPage(maxPage), WithGroupSize(groupSize))
 			if err != nil {
-				t.Fatalf("failed to create queue: %v", err)
+				t.Errorf("unexpected error state: %v", err)
+				return
 			}
 
-			var wg sync.WaitGroup
-			wg.Add(1)
-			go func(wg *sync.WaitGroup) {
-				var err error
-				defer wg.Done()
-				for _, data := range tt.enqueueData {
-					err := gq.Enqueue("queue1", data)
-					if err != nil {
-						t.Errorf("enqueue failed: %v", err)
-					}
-				}
-				for _, data := range tt.enqueueData {
-					err := gq.Enqueue("queue2", data)
-					if err != nil {
-						t.Errorf("enqueue failed: %v", err)
-					}
-				}
-				for _, data := range tt.enqueueData {
-					err := gq.Enqueue("queue3", data)
-					if err != nil {
-						t.Errorf("enqueue failed: %v", err)
-					}
-				}
-				err = gq.CloseQueue()
-				if err != nil {
-					t.Errorf("failed to close queue: %v", err)
-				}
-			}(&wg)
-
-			totalDataNum := len(tt.enqueueData) * 3
-			f := func(d *Data) error {
-				totalDataNum--
-				return nil
+			testData := make([]*TestData, 0, tt.enqueueNums)
+			for i := 0; i < tt.enqueueNums; i++ {
+				testData = append(testData, &TestData{Value: i})
 			}
 
-			wg.Add(1)
+			var ewg sync.WaitGroup
+			var dwg sync.WaitGroup
+			dwg.Add(1)
 			go func(wg *sync.WaitGroup) {
-				var err error
 				defer wg.Done()
 				for {
-					err = gq.FuncAfterDequeue(f)
-					if err != nil {
-						if IsErrQueueClose(err) {
-							err = gq.CloseIndex()
-							if err != nil {
-								t.Errorf("Failed to close index: %v", err)
+					_, err := gq.FuncAfterBulkDequeue(tt.size, tt.lazy, tt.f)
+					if tt.name == "func error" {
+						// nothing to do
+						break
+					} else {
+						if err != nil {
+							if IsErrQueueClose(err) {
+								break
 							}
-							break
-						} else {
-							t.Errorf("dequeue failed: %v", err)
+							t.Errorf("unexpected error state: %v", err)
 						}
 					}
 				}
-			}(&wg)
-			wg.Wait()
+			}(&dwg)
+
+			gq.WaitInitialize()
+
+			for _, qn := range queueNames {
+				ewg.Add(1)
+				go func(wg *sync.WaitGroup, qn string) {
+					defer wg.Done()
+					for _, d := range testData {
+						err := gq.Enqueue(qn, d)
+						if err != nil {
+							t.Errorf("unexpected error state: %v", err)
+						}
+						// Forcing the file to sleep and other queues
+						// because the process is too fast and the file time does not change.
+						time.Sleep(20 * time.Millisecond)
+					}
+				}(&ewg, qn)
+			}
+			ewg.Wait()
+			err = gq.CloseQueue()
+			if err != nil {
+				t.Errorf("unexpected error state: %v", err)
+				return
+			}
+			dwg.Wait()
+			err = gq.CloseIndex()
+			if err != nil {
+				t.Errorf("unexpected error state: %v", err)
+				return
+			}
+			if tt.name != "func error" {
+				for _, qn := range queueNames {
+					index := readIndex(filepath.Join(dir, qn, indexFilename))
+					if want := uint64(tt.enqueueNums - 1); *index != want {
+						t.Errorf("index got = %d, want = %d", *index, want)
+					}
+				}
+			}
 		})
 	}
 }
 
-func TestGQBulkEnqueueDequeue(t *testing.T) {
-	type Data struct {
-		Value int
+func TestGroupAddQueue(t *testing.T) {
+	var queueSize uint64 = 10
+	var maxPage uint64 = 2
+	var groupSize int = 3
+	dir, _ := os.MkdirTemp("", "ffqtest")
+	defer removeAll(dir, t)
+
+	gq, err := NewGroupQueue[TestData]("testQueue", WithFileDir(dir), WithQueueSize(queueSize), WithMaxPage(maxPage), WithGroupSize(groupSize))
+	if err != nil {
+		t.Errorf("unexpected error state: %v", err)
+		return
 	}
-	tests := []struct {
-		name            string
-		enqueueData     []*Data
-		expectedDequeue []*Data
-		bulkSize        int
-		lazy            time.Duration
-	}{
-		{
-			name: "bulk group enqueue and dequeue",
-			enqueueData: []*Data{
-				{Value: 1},
-				{Value: 2},
-				{Value: 3},
-				{Value: 4},
-				{Value: 5},
-				{Value: 6},
-				{Value: 7},
-				{Value: 8},
-				{Value: 9},
-				{Value: 10},
-				{Value: 11},
-				{Value: 12},
-				{Value: 13},
-				{Value: 14},
-				{Value: 15},
-			},
-			expectedDequeue: []*Data{
-				{Value: 1},
-				{Value: 2},
-				{Value: 3},
-				{Value: 4},
-				{Value: 5},
-				{Value: 6},
-				{Value: 7},
-				{Value: 8},
-				{Value: 9},
-				{Value: 10},
-				{Value: 11},
-				{Value: 12},
-				{Value: 13},
-				{Value: 14},
-				{Value: 15},
-			},
-			bulkSize: 4,
-			lazy:     10 * time.Millisecond,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			dir := "testdata/group_queue/bulk_enqueue_dequeue/ffq"
-			defer os.RemoveAll(dir)
-
-			queueSize := 5
-			maxPages := 2
-			encoder := json.Marshal
-			decoder := json.Unmarshal
-
-			gq, err := NewGroupQueue[Data](
-				"testQueue",
-				WithFileDir(dir),
-				WithQueueSize(queueSize),
-				WithMaxPages(maxPages),
-				WithEncoder(encoder),
-				WithDecoder(decoder),
-			)
-
-			gq.WaitInitialize()
-
-			if err != nil {
-				t.Fatalf("failed to create queue: %v", err)
-			}
-
-			var wg sync.WaitGroup
-			wg.Add(1)
-			go func(wg *sync.WaitGroup) {
-				var err error
-				defer wg.Done()
-				err = gq.BulkEnqueue("queue1", tt.enqueueData)
-				if err != nil {
-					t.Errorf("enqueue failed: %v", err)
-				}
-				err = gq.BulkEnqueue("queue2", tt.enqueueData)
-				if err != nil {
-					t.Errorf("enqueue failed: %v", err)
-				}
-				err = gq.BulkEnqueue("queue3", tt.enqueueData)
-				if err != nil {
-					t.Errorf("enqueue failed: %v", err)
-				}
-
-				err = gq.CloseQueue()
-				if err != nil {
-					t.Errorf("failed to close queue: %v", err)
-				}
-			}(&wg)
-
-			wg.Add(1)
-			go func(wg *sync.WaitGroup) {
-				var err error
-				var messages chan []*Message[Data]
-				defer wg.Done()
-				i := 0
-				for {
-					messages, err = gq.BulkDequeue(tt.bulkSize, tt.lazy)
-					if err != nil {
-						if IsErrQueueClose(err) {
-							err = gq.CloseIndex()
-							if err != nil {
-								t.Errorf("Failed to close index: %v", err)
-							}
-							break
-						} else {
-							t.Errorf("dequeue failed: %v", err)
-						}
-					}
-					for ms := range messages {
-						for _, m := range ms {
-							m.Data()
-							m.Index()
-							m.Name()
-							gq.UpdateIndex(m)
-							i++
-						}
-					}
-				}
-			}(&wg)
-			wg.Wait()
-		})
-	}
-}
-
-func TestGQBulkEnqueueDequeueWithFunc(t *testing.T) {
-	type Data struct {
-		Value int
-	}
-	tests := []struct {
-		name            string
-		enqueueData     []*Data
-		expectedDequeue []*Data
-		bulkSize        int
-		lazy            time.Duration
-	}{
-		{
-			name: "bulk group enqueue and dequeue",
-			enqueueData: []*Data{
-				{Value: 1},
-				{Value: 2},
-				{Value: 3},
-				{Value: 4},
-				{Value: 5},
-				{Value: 6},
-				{Value: 7},
-				{Value: 8},
-				{Value: 9},
-				{Value: 10},
-				{Value: 11},
-				{Value: 12},
-				{Value: 13},
-				{Value: 14},
-				{Value: 15},
-			},
-			expectedDequeue: []*Data{
-				{Value: 1},
-				{Value: 2},
-				{Value: 3},
-				{Value: 4},
-				{Value: 5},
-				{Value: 6},
-				{Value: 7},
-				{Value: 8},
-				{Value: 9},
-				{Value: 10},
-				{Value: 11},
-				{Value: 12},
-				{Value: 13},
-				{Value: 14},
-				{Value: 15},
-			},
-			bulkSize: 4,
-			lazy:     10 * time.Millisecond,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			dir := "testdata/group_queue/bulk_enqueue_dequeue_with_func/ffq"
-			defer os.RemoveAll(dir)
-
-			queueSize := 5
-			maxPages := 2
-			encoder := json.Marshal
-			decoder := json.Unmarshal
-
-			gq, err := NewGroupQueue[Data](
-				"testQueue",
-				WithFileDir(dir),
-				WithQueueSize(queueSize),
-				WithMaxPages(maxPages),
-				WithEncoder(encoder),
-				WithDecoder(decoder),
-			)
-
-			gq.WaitInitialize()
-
-			if err != nil {
-				t.Fatalf("failed to create queue: %v", err)
-			}
-
-			var wg sync.WaitGroup
-			wg.Add(1)
-			go func(wg *sync.WaitGroup) {
-				var err error
-				defer wg.Done()
-				err = gq.BulkEnqueue("queue1", tt.enqueueData)
-				if err != nil {
-					t.Errorf("enqueue failed: %v", err)
-				}
-				err = gq.BulkEnqueue("queue2", tt.enqueueData)
-				if err != nil {
-					t.Errorf("enqueue failed: %v", err)
-				}
-				err = gq.BulkEnqueue("queue3", tt.enqueueData)
-				if err != nil {
-					t.Errorf("enqueue failed: %v", err)
-				}
-
-				err = gq.CloseQueue()
-				if err != nil {
-					t.Errorf("failed to close queue: %v", err)
-				}
-			}(&wg)
-
-			totalDataNum := len(tt.enqueueData) * 3
-			f := func(d []*Data) error {
-				totalDataNum -= len(d)
-				return nil
-			}
-
-			wg.Add(1)
-			go func(wg *sync.WaitGroup) {
-				var err error
-				defer wg.Done()
-				for {
-					err = gq.FuncAfterBulkDequeue(tt.bulkSize, tt.lazy, f)
-					if err != nil {
-						if IsErrQueueClose(err) {
-							err = gq.CloseIndex()
-							if err != nil {
-								t.Errorf("Failed to close index: %v", err)
-							}
-							break
-						} else {
-							t.Errorf("dequeue failed: %v", err)
-						}
-					}
-				}
-			}(&wg)
-			wg.Wait()
-		})
-	}
-}
-
-func TestGQLength(t *testing.T) {
-	type Data struct {
-		Value int
-	}
-
-	enqueueData := []*Data{
-		{Value: 1},
-		{Value: 2},
-		{Value: 3},
-	}
-
-	dir := "testdata/group_queue/length/ffq"
-	defer os.RemoveAll(dir)
-
-	queueSize := 5
-	maxPages := 2
-	encoder := json.Marshal
-	decoder := json.Unmarshal
-
-	gq, err := NewGroupQueue[Data](
-		"testQueue",
-		WithFileDir(dir),
-		WithQueueSize(queueSize),
-		WithMaxPages(maxPages),
-		WithEncoder(encoder),
-		WithDecoder(decoder),
-	)
 
 	gq.WaitInitialize()
 
+	err = gq.Enqueue("1", &TestData{Value: 1})
 	if err != nil {
-		t.Fatalf("failed to create queue: %v", err)
+		t.Errorf("unexpected error state: %v", err)
+		return
+	}
+	err = gq.Enqueue("2", &TestData{Value: 2})
+	if err != nil {
+		t.Errorf("unexpected error state: %v", err)
+		return
+	}
+	err = gq.Enqueue("3", &TestData{Value: 3})
+	if err != nil {
+		t.Errorf("unexpected error state: %v", err)
+		return
+	}
+	err = gq.Enqueue("4", &TestData{Value: 4})
+	if err.Error() != "reached group queue max size, 3" {
+		t.Errorf("want reached group queue max size, 3")
+		return
 	}
 
-	testQueues := []string{"queue1", "queue2", "queue3"}
+	gq.CloseQueue()
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func(wg *sync.WaitGroup) {
-		var err error
-		defer wg.Done()
-		for _, tq := range testQueues {
-			err = gq.BulkEnqueue(tq, enqueueData)
-			if err != nil {
-				t.Errorf("enqueue failed: %v", err)
-			}
-		}
-		err = gq.CloseQueue()
-		if err != nil {
-			t.Errorf("failed to close queue: %v", err)
-		}
-	}(&wg)
-	wg.Wait()
-	expected := len(enqueueData)
-	actual := gq.Length()
-	for _, l := range actual {
-		if expected != l {
-			t.Errorf("Failed test: expected: %d, actual: %d", expected, l)
-		}
+	err = gq.Enqueue("4", &TestData{Value: 4})
+	if err.Error() != "already closed" {
+		t.Errorf("want already closed")
+		return
+	}
+}
+
+func TestGroupGetActiveQueue(t *testing.T) {
+	var queueSize uint64 = 10
+	var maxPage uint64 = 2
+	var groupSize int = 3
+	dir, _ := os.MkdirTemp("", "ffqtest")
+	defer removeAll(dir, t)
+
+	gq, err := NewGroupQueue[TestData]("testQueue", WithFileDir(dir), WithQueueSize(queueSize), WithMaxPage(maxPage), WithGroupSize(groupSize))
+	if err != nil {
+		t.Errorf("unexpected error state: %v", err)
+		return
 	}
 
+	gq.WaitInitialize()
+
+	gq.Enqueue("1", &TestData{Value: 1})
+	gq.Enqueue("2", &TestData{Value: 2})
+
+	_, i := gq.getActiveQueue()
+	if i != 0 {
+		t.Errorf("active queue index got = %d, want = %d", i, 0)
+	}
+	_, i = gq.getActiveQueue()
+	if i != 1 {
+		t.Errorf("active queue index got = %d, want = %d", i, 1)
+	}
+	_, i = gq.getActiveQueue()
+	if i != 0 {
+		t.Errorf("active queue index got = %d, want = %d", i, 0)
+	}
+}
+
+func TestGroupQueueLength(t *testing.T) {
+	var queueSize uint64 = 10
+	var maxPage uint64 = 2
+	var groupSize int = 3
+	dir, _ := os.MkdirTemp("", "ffqtest")
+	defer removeAll(dir, t)
+
+	gq, err := NewGroupQueue[TestData]("testQueue", WithFileDir(dir), WithQueueSize(queueSize), WithMaxPage(maxPage), WithGroupSize(groupSize))
+	if err != nil {
+		t.Errorf("unexpected error state: %v", err)
+		return
+	}
+
+	gq.WaitInitialize()
+
+	gq.Enqueue("1", &TestData{Value: 1})
+	gq.Enqueue("2", &TestData{Value: 2})
+
+	ls, total := gq.Length()
+	wantLs := []uint64{1, 1}
+	for i, wl := range wantLs {
+		if l := ls[i]; l != wl {
+			t.Errorf("queue lengths got = %d, want = %d", l, wl)
+		}
+	}
+	if total != 2 {
+		t.Errorf("total got = %d, want = %d", total, 2)
+	}
 }

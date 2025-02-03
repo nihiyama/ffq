@@ -21,41 +21,35 @@ func createQueueDir(dirName string) error {
 }
 
 func openIndexFile(indexFilepath string) (*os.File, error) {
-	indexFile, err := os.OpenFile(indexFilepath, os.O_RDWR|os.O_CREATE, 0644)
+	indexFile, err := os.OpenFile(indexFilepath, fOpenFlag, 0644)
 	if err != nil {
 		return nil, err
 	}
 	return indexFile, err
 }
 
-func readIndex(indexFilepath string) (int, int, int, error) {
+func readIndex(indexFilepath string) *uint64 {
 	var err error
 	if _, err := os.Stat(indexFilepath); os.IsNotExist(err) {
-		return 0, 0, 0, nil
+		return nil
 	}
 	indexFile, err := os.Open(indexFilepath)
 	if err != nil {
-		return 0, 0, 0, err
+		// if cannot open remove index file
+		os.Remove(indexFilepath)
+		return nil
 	}
 	defer indexFile.Close()
 
-	// uint32 size is 4
-	// | -- page(4) -- | -- globalIndex(4) -- | -- localIndex(4) -- |
-	var page uint32
-	var globalIndex uint32
-	var localIndex uint32
-	err = binary.Read(indexFile, binary.LittleEndian, &page)
+	// uint64 size is 8
+	// | -- index(8) -- |
+	var index uint64
+	err = binary.Read(indexFile, binary.LittleEndian, &index)
 	if err != nil {
-		return 0, 0, 0, err
-	}
-	err = binary.Read(indexFile, binary.LittleEndian, &globalIndex)
-	if err != nil {
-		return int(page), 0, 0, err
-	}
-	err = binary.Read(indexFile, binary.LittleEndian, &localIndex)
-	if err != nil {
-		return int(page), int(globalIndex), 0, err
+		// if cannot read remove index file
+		os.Remove(indexFilepath)
+		return nil
 	}
 
-	return int(page), int(globalIndex), int(localIndex), nil
+	return &index
 }
