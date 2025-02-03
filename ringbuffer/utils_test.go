@@ -20,7 +20,7 @@ func TestCreateQueueDir_alreadyExist(t *testing.T) {
 
 	err := createQueueDir(dir)
 	if err != nil {
-		t.Errorf("failed test: acutal is not nil, %v", err)
+		t.Errorf("failed test: got is not nil, %v", err)
 	}
 }
 
@@ -31,7 +31,7 @@ func TestCreateQueueDir_notMkdirPermission(t *testing.T) {
 	os.Chmod(dir, 0400)
 	err := createQueueDir(filepath.Join(dir, "dir"))
 	if err == nil {
-		t.Errorf("failed test: acutal is not nil, %v", err)
+		t.Errorf("failed test: got is not nil, %v", err)
 	}
 }
 
@@ -41,7 +41,7 @@ func TestCreateQueueDir_notExist(t *testing.T) {
 
 	err := createQueueDir(dir)
 	if err != nil {
-		t.Errorf("failed test: acutal is not nil, %v", err)
+		t.Errorf("failed test: got is not nil, %v", err)
 	}
 }
 
@@ -53,7 +53,7 @@ func TestOpenIndexFile_alreadyExist(t *testing.T) {
 	indexFile.Close()
 	_, err := openIndexFile(indexFile.Name())
 	if err != nil {
-		t.Errorf("failed test: acutal is not nil, %v", err)
+		t.Errorf("failed test: got is not nil, %v", err)
 	}
 }
 
@@ -67,7 +67,7 @@ func TestOpenIndexFile_notPermission(t *testing.T) {
 
 	_, err := openIndexFile(indexFile.Name())
 	if err == nil {
-		t.Errorf("failed test: acutal is not nil, %v", err)
+		t.Errorf("failed test: got is not nil, %v", err)
 	}
 }
 func TestOpenIndexFile_notExist(t *testing.T) {
@@ -76,7 +76,7 @@ func TestOpenIndexFile_notExist(t *testing.T) {
 
 	_, err := openIndexFile(filepath.Join(dir, "index"))
 	if err != nil {
-		t.Errorf("failed test: acutal is not nil, %v", err)
+		t.Errorf("failed test: got is not nil, %v", err)
 	}
 }
 
@@ -94,7 +94,7 @@ func TestReadIndex_alreadyExist(t *testing.T) {
 
 	got := readIndex(tmpFile.Name())
 	if *got != index {
-		t.Errorf("failed test: acutal is not equal index, %d, %d", *got, index)
+		t.Errorf("failed test: got is not equal index, %d, %d", *got, index)
 	}
 }
 
@@ -104,7 +104,7 @@ func TestReadIndex_notExist(t *testing.T) {
 
 	got := readIndex("index")
 	if got != nil {
-		t.Errorf("failed test: acutal is not nil, %d", *got)
+		t.Errorf("failed test: got is not nil, %d", *got)
 	}
 }
 
@@ -123,7 +123,7 @@ func TestReadIndex_notPermission(t *testing.T) {
 
 	got := readIndex(tmpFile.Name())
 	if got != nil {
-		t.Errorf("failed test: acutal is not nil, %v", *got)
+		t.Errorf("failed test: got is not nil, %v", *got)
 	}
 }
 
@@ -138,6 +138,6 @@ func TestReadIndex_notMatchPattern(t *testing.T) {
 
 	got := readIndex(tmpFile.Name())
 	if got != nil {
-		t.Errorf("failed test: acutal is not nil, %v", *got)
+		t.Errorf("failed test: got is not nil, %v", *got)
 	}
 }

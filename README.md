@@ -191,29 +191,30 @@ comming soon...
 
 ## Benchmark
 
-A dataset with 12 keys was prepared, where each key has corresponding string, int, slice, and map values. This dataset was used to conduct benchmark tests at four different scales: 10, 100, 1000, and 10000 data points.
+A dataset with 12 keys was prepared, where each key has corresponding string, int, slice, and map values (more than 1kb). This dataset was used to conduct benchmark tests at four different scales: 10, 100 and 1000 data points.
 
 ```
 goos: linux
 goarch: arm64
-pkg: github.com/nihiyama/ffq
-BenchmarkSimpleQueueEnqueueDequeue/Size10-8                 5815            188403 ns/op           27523 B/op        304 allocs/op
-BenchmarkSimpleQueueEnqueueDequeue/Size100-8                1081           1106183 ns/op          272627 B/op       3006 allocs/op
-BenchmarkSimpleQueueEnqueueDequeue/Size1000-8                115          10173246 ns/op         2805859 B/op      30026 allocs/op
-BenchmarkSimpleQueueEnqueueDequeue/Size10000-8                12          97968462 ns/op        27669352 B/op     300093 allocs/op
-BenchmarkSimpleQueueBulkEnqueueDequeue/Size10-8            14205             83792 ns/op           28102 B/op        280 allocs/op
-BenchmarkSimpleQueueBulkEnqueueDequeue/Size100-8            2817            422668 ns/op          354145 B/op       2716 allocs/op
-BenchmarkSimpleQueueBulkEnqueueDequeue/Size1000-8                    327           3592632 ns/op         4179689 B/op      27059 allocs/op
-BenchmarkSimpleQueueBulkEnqueueDequeue/Size10000-8                    31          35433528 ns/op        48759354 B/op     270433 allocs/op
-BenchmarkGroupQueueEnqueueDequeue_3Group/Size10-8                   1711            762666 ns/op          118747 B/op       1083 allocs/op
-BenchmarkGroupQueueEnqueueDequeue_3Group/Size100-8                   445           2505991 ns/op          897039 B/op       9311 allocs/op
-BenchmarkGroupQueueEnqueueDequeue_3Group/Size1000-8                   70          17469755 ns/op         8547570 B/op      90740 allocs/op
-BenchmarkGroupQueueEnqueueDequeue_3Group/Size10000-8                   8         138459084 ns/op        83293945 B/op     901250 allocs/op
-BenchmarkGroupQueueBulkEnqueueDequeue_3Group/Size10-8                100          12532097 ns/op          115502 B/op        979 allocs/op
-BenchmarkGroupQueueBulkEnqueueDequeue_3Group/Size100-8                81          13359309 ns/op         1425902 B/op       8304 allocs/op
-BenchmarkGroupQueueBulkEnqueueDequeue_3Group/Size1000-8               75          15646925 ns/op        13932777 B/op      81244 allocs/op
-BenchmarkGroupQueueBulkEnqueueDequeue_3Group/Size10000-8              22          51524816 ns/op        107287254 B/op    810956 allocs/op
+pkg: github.com/nihiyama/ffq/ringbuffer
+BenchmarkSimpleQueueEnqueueDequeue/Size10-8                10000            146467 ns/op           40225 B/op        304 allocs/op
+BenchmarkSimpleQueueEnqueueDequeue/Size100-8                1530            777684 ns/op          402447 B/op       3006 allocs/op
+BenchmarkSimpleQueueEnqueueDequeue/Size1000-8                210           5514527 ns/op         3960243 B/op      30015 allocs/op
+BenchmarkSimpleQueueBulkEnqueueDequeue/Size10-8            22395             52355 ns/op           40308 B/op        281 allocs/op
+BenchmarkSimpleQueueBulkEnqueueDequeue/Size100-8            3025            395634 ns/op          475160 B/op       2714 allocs/op
+BenchmarkSimpleQueueBulkEnqueueDequeue/Size1000-8                    297           3941332 ns/op         5543107 B/op      27056 allocs/op
+BenchmarkSimpleQueueEnqueueDequeue_5MP/Size10-8                     3229            558267 ns/op          201044 B/op       1515 allocs/op
+BenchmarkSimpleQueueEnqueueDequeue_5MP/Size100-8                     297           3600200 ns/op         2020212 B/op      15029 allocs/op
+BenchmarkSimpleQueueEnqueueDequeue_5MP/Size1000-8                     31          32455408 ns/op        19861525 B/op     150117 allocs/op
+BenchmarkSimpleQueueBulkEnqueueDequeue_5MP/Size10-8                 4480            257337 ns/op          192031 B/op       1380 allocs/op
+BenchmarkSimpleQueueBulkEnqueueDequeue_5MP/Size100-8                 552           2095460 ns/op         2193344 B/op      13561 allocs/op
+BenchmarkSimpleQueueBulkEnqueueDequeue_5MP/Size1000-8                 52          21862708 ns/op        29965125 B/op     135308 allocs/op
+BenchmarkGroupQueueEnqueueDequeue_5Group/Size10-8                   1465            751427 ns/op          266635 B/op       1762 allocs/op
+BenchmarkGroupQueueEnqueueDequeue_5Group/Size100-8                   530           2222183 ns/op         2182742 B/op      15301 allocs/op
+BenchmarkGroupQueueEnqueueDequeue_5Group/Size1000-8                   94          12747984 ns/op        19951426 B/op     150356 allocs/op
+BenchmarkGroupQueueBulkEnqueueDequeue_5Group/Size10-8               2799            421194 ns/op          263407 B/op       1624 allocs/op
+BenchmarkGroupQueueBulkEnqueueDequeue_5Group/Size100-8               753           1662122 ns/op         3206951 B/op      13830 allocs/op
+BenchmarkGroupQueueBulkEnqueueDequeue_5Group/Size1000-8              111          10224487 ns/op        29013525 B/op     135512 allocs/op
 PASS
-ok      github.com/nihiyama/ffq 59.291s
+ok      github.com/nihiyama/ffq/ringbuffer      51.898s
 ```
-

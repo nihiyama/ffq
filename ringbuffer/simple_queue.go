@@ -206,6 +206,9 @@ func (q *Queue[T]) bulkEnqueue(tail uint64, items []*T) error {
 		return err
 	}
 	err = q.writeQueue(buf, tail)
+	if err != nil {
+		return err
+	}
 
 	for _, item := range items {
 		m := &Message[T]{
@@ -215,10 +218,6 @@ func (q *Queue[T]) bulkEnqueue(tail uint64, items []*T) error {
 		}
 		q.queue <- m
 		tail++
-	}
-
-	if err != nil {
-		return err
 	}
 	return nil
 }
@@ -453,16 +452,15 @@ func (q *Queue[T]) FuncAfterDequeue(f func(*T) error) error {
 //	if err != nil {
 //	    log.Fatal(err)
 //	}
-func (q *Queue[T]) FuncAfterBulkDequeue(size uint64, lazy time.Duration, f func([]*T) error) error {
+func (q *Queue[T]) FuncAfterBulkDequeue(size uint64, lazy time.Duration, f func([]*T) error) (int, error) {
 	var err error
-	var m *Message[T]
-	var ok bool
 	items := make([]*T, 0, size)
 
-	m, err = q.Dequeue()
+	m, err := q.Dequeue()
 	if err != nil {
-		return err
+		return 0, err
 	}
+	lastM := m
 	items = append(items, m.item)
 
 	timer := time.After(lazy)
@@ -471,12 +469,13 @@ LOOP:
 		select {
 		case <-timer:
 			break LOOP
-		case m, ok = <-q.queue:
+		case m, ok := <-q.queue:
 			if !ok {
 				// return ErrQueueClose at next time
 				break LOOP
 			}
 			items = append(items, m.item)
+			lastM = m
 			if uint64(len(items)) == size {
 				break LOOP
 			}
@@ -486,11 +485,11 @@ LOOP:
 	if fErr != nil {
 		err = errors.Join(err, fErr)
 	}
-	iErr := q.writeIndex(m.index)
+	iErr := q.writeIndex(lastM.index)
 	if iErr != nil {
 		err = errors.Join(err, iErr)
 	}
-	return err
+	return len(items), err
 }
 
 func (q *Queue[T]) writeQueue(b []byte, tail uint64) error {
@@ -539,7 +538,7 @@ func (q *Queue[T]) rotateFile() error {
 	}
 	atomic.StoreUint64(&q.currentPage, currentPage)
 	newQueueFilepath := filepath.Join(q.fileDir, fmt.Sprintf("%s.%d", queueFilename, currentPage))
-	newQueueFile, err := os.Create(newQueueFilepath)
+	newQueueFile, err := os.OpenFile(newQueueFilepath, fCreateFlag, 0644)
 	if err != nil {
 		return err
 	}
@@ -612,7 +611,7 @@ func (q *Queue[T]) initialize() {
 		stat, err := os.Stat(queueFilepath)
 		if err != nil {
 			if os.IsNotExist(err) {
-				queueFile, err = os.Create(queueFilepath)
+				queueFile, err = os.OpenFile(queueFilepath, fCreateFlag, 0644)
 				if err != nil {
 					panic(fmt.Sprintf("could not create file, %s, %v", queueFilepath, err))
 				}
@@ -625,7 +624,7 @@ func (q *Queue[T]) initialize() {
 		}
 
 		// read queue file and set queue
-		queueFile, err = os.OpenFile(queueFilepath, os.O_RDWR|os.O_CREATE, 0644)
+		queueFile, err = os.OpenFile(queueFilepath, fOpenFlag, 0644)
 		if err != nil {
 			panic(fmt.Sprintf("could not open file, %s, %v", queueFilepath, err))
 		}

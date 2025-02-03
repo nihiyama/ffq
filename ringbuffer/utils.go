@@ -21,7 +21,7 @@ func createQueueDir(dirName string) error {
 }
 
 func openIndexFile(indexFilepath string) (*os.File, error) {
-	indexFile, err := os.OpenFile(indexFilepath, os.O_RDWR|os.O_CREATE, 0644)
+	indexFile, err := os.OpenFile(indexFilepath, fOpenFlag, 0644)
 	if err != nil {
 		return nil, err
 	}

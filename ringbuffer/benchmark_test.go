@@ -3,6 +3,7 @@ package ringbuffer_test
 import (
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -10,7 +11,7 @@ import (
 	"github.com/nihiyama/ffq/ringbuffer"
 )
 
-var tests = []int{10, 100, 1000, 10000}
+var tests = []int{10, 100, 1000}
 
 type BenchmarkData struct {
 	Val1  string
@@ -58,7 +59,7 @@ func createData(n int) []*BenchmarkData {
 			val4[k] = fmt.Sprintf("string map val4, %d, %d", j, i)
 		}
 		d := BenchmarkData{
-			Val1:  fmt.Sprintf("string val1, %d", i),
+			Val1:  fmt.Sprintf("string val1, %d, 1kb data: %s", i, strings.Repeat("a", 1024)),
 			Val2:  i * 2,
 			Val3:  val3,
 			Val4:  val4,
@@ -79,7 +80,7 @@ func createData(n int) []*BenchmarkData {
 func BenchmarkSimpleQueueEnqueueDequeue(b *testing.B) {
 	for _, tt := range tests {
 		b.Run(fmt.Sprintf("Size%d", tt), func(b *testing.B) {
-			dir := fmt.Sprintf("testdata/benchmark/simple_queue/single/%d/ffq", tt)
+			dir, _ := os.MkdirTemp("", "ffqbenchtest")
 			data := createData(tt)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
@@ -132,7 +133,7 @@ func BenchmarkSimpleQueueBulkEnqueueDequeue(b *testing.B) {
 	lazy := 10 * time.Millisecond
 	for _, tt := range tests {
 		b.Run(fmt.Sprintf("Size%d", tt), func(b *testing.B) {
-			dir := fmt.Sprintf("testdata/benchmark/simple_queue/bulk/%d/ffq", tt)
+			dir, _ := os.MkdirTemp("", "ffqbenchtest")
 			data := createData(tt)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
@@ -179,7 +180,7 @@ func BenchmarkSimpleQueueBulkEnqueueDequeue(b *testing.B) {
 func BenchmarkSimpleQueueEnqueueDequeue_5MP(b *testing.B) {
 	for _, tt := range tests {
 		b.Run(fmt.Sprintf("Size%d", tt), func(b *testing.B) {
-			dir := fmt.Sprintf("testdata/benchmark/simple_queue/single_mp/%d/ffq", tt)
+			dir, _ := os.MkdirTemp("", "ffqbenchtest")
 			data := createData(tt)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
@@ -241,7 +242,7 @@ func BenchmarkSimpleQueueBulkEnqueueDequeue_5MP(b *testing.B) {
 	lazy := 10 * time.Millisecond
 	for _, tt := range tests {
 		b.Run(fmt.Sprintf("Size%d", tt), func(b *testing.B) {
-			dir := fmt.Sprintf("testdata/benchmark/simple_queue/bulk_mp/%d/ffq", tt)
+			dir, _ := os.MkdirTemp("", "ffqbenchtest")
 			data := createData(tt)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
@@ -299,7 +300,7 @@ func BenchmarkGroupQueueEnqueueDequeue_5Group(b *testing.B) {
 	testQueues := []string{"queue1", "queue2", "queue3", "queue4", "queue5"}
 	for _, tt := range tests {
 		b.Run(fmt.Sprintf("Size%d", tt), func(b *testing.B) {
-			dir := fmt.Sprintf("testdata/benchmark/group_queue/single/%d/ffq", tt)
+			dir, _ := os.MkdirTemp("", "ffqbenchtest")
 			data := createData(tt)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
@@ -359,7 +360,7 @@ func BenchmarkGroupQueueBulkEnqueueDequeue_5Group(b *testing.B) {
 	lazy := 10 * time.Millisecond
 	for _, tt := range tests {
 		b.Run(fmt.Sprintf("Size%d", tt), func(b *testing.B) {
-			dir := fmt.Sprintf("testdata/benchmark/group_queue/bulk/%d/ffq", tt)
+			dir, _ := os.MkdirTemp("", "ffqbenchtest")
 			data := createData(tt)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
@@ -391,7 +392,7 @@ func BenchmarkGroupQueueBulkEnqueueDequeue_5Group(b *testing.B) {
 				go func(wg *sync.WaitGroup) {
 					defer wg.Done()
 					for {
-						ms, err := gq.BulkDequeue(size, lazy)
+						ms, err := gq.BulkDequeue(uint64(size), lazy)
 						if err != nil {
 							if ringbuffer.IsErrQueueClose(err) {
 								gq.CloseIndex()
@@ -401,7 +402,6 @@ func BenchmarkGroupQueueBulkEnqueueDequeue_5Group(b *testing.B) {
 						for _, m := range ms {
 							gq.UpdateIndex(m)
 						}
-
 					}
 				}(&wg)
 				wg.Wait()

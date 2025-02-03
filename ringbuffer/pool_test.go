@@ -9,14 +9,14 @@ import (
 
 func TestSetQueueBufferSize(t *testing.T) {
 	tests := []struct {
-		name   string
-		input  int
-		expect int
+		name  string
+		input int
+		want  int
 	}{
 		{
-			name:   "set buffer size",
-			input:  128 * 1024,
-			expect: 128 * 1024,
+			name:  "set buffer size",
+			input: 128 * 1024,
+			want:  128 * 1024,
 		},
 	}
 
@@ -31,9 +31,9 @@ func TestSetQueueBufferSize(t *testing.T) {
 			SetQueueBufferSize(tt.input)
 			runtime.GC()
 			buf := queueBufPool.Get().(*bytes.Buffer)
-			actual := buf.Cap()
-			if tt.expect != actual {
-				t.Errorf("Failed test: %s, expect: %d, actual %d", tt.name, tt.expect, actual)
+			got := buf.Cap()
+			if tt.want != got {
+				t.Errorf("Failed test: %s, want: %d, got %d", tt.name, tt.want, got)
 			}
 		})
 	}
