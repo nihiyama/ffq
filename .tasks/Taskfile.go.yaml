@@ -6,21 +6,10 @@ tasks:
     desc: run go test
     dir: "{{.ROOT_DIR}}"
     cmds:
-      - chmod 111 testdata/utils/read_index/ffq/index_invalid_permission
-      - cmd: go test -v -shuffle=on -timeout 10s -coverprofile=coverage.out $(go list ./... | grep -v "examples")
+      - cmd: go test -v -shuffle=on -race -timeout 10s -coverprofile=coverage.out $(go list ./... | grep -v "examples")
         ignore_error: true
       - go tool cover -func=coverage.out
-      - chmod 644 testdata/utils/read_index/ffq/index_invalid_permission
-    silent: true
-  
-  race:
-    desc: run go test
-    dir: "{{.ROOT_DIR}}"
-    cmds:
-      - chmod 111 testdata/utils/read_index/ffq/index_invalid_permission
-      - cmd: go test -v -shuffle=on -race -timeout 10s -coverprofile=coverage.out $(go list ./... | grep -v "examples")
-        ignore_error: true      
-      - chmod 644 testdata/utils/read_index/ffq/index_invalid_permission
+      - go tool cover -html=coverage.out -o coverage.html
     silent: true
 
   bench:

@@ -1,4 +1,4 @@
-package ringbuffer
+package ffq
 
 import "os"
 

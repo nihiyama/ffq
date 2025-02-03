@@ -6,27 +6,27 @@ import (
 
 func TestIsErrQueueNotFound(t *testing.T) {
 	err := ErrQueueNotFound
-	expect := true
-	actual := IsErrQueueNotFound(err)
-	if expect != actual {
-		t.Fatalf("Failed test, expect: %v, actual: %v", expect, actual)
+	want := true
+	got := IsErrQueueNotFound(err)
+	if want != got {
+		t.Errorf("failed test: want: %v, got: %v", want, got)
 	}
 }
 
 func TestIsErrQueueOption(t *testing.T) {
 	err := ErrQueueOption
-	expect := true
-	actual := IsErrQueueOption(err)
-	if expect != actual {
-		t.Fatalf("Failed test, expect: %v, actual: %v", expect, actual)
+	want := true
+	got := IsErrQueueOption(err)
+	if want != got {
+		t.Errorf("failed test: want: %v, got: %v", want, got)
 	}
 }
 
 func TestIsErrQueueClose(t *testing.T) {
 	err := ErrQueueClose
-	expect := true
-	actual := IsErrQueueClose(err)
-	if expect != actual {
-		t.Fatalf("Failed test, expect: %v, actual: %v", expect, actual)
+	want := true
+	got := IsErrQueueClose(err)
+	if want != got {
+		t.Errorf("failed test: want: %v, got: %v", want, got)
 	}
 }

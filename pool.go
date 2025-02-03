@@ -11,7 +11,7 @@ var queueBufferSize = 64 * 1024
 var (
 	indexBufPool = sync.Pool{
 		New: func() any {
-			var b [12]byte
+			var b [8]byte
 			return &b
 		},
 	}

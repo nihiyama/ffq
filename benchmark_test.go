@@ -3,6 +3,7 @@ package ffq_test
 import (
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -10,7 +11,7 @@ import (
 	"github.com/nihiyama/ffq"
 )
 
-var tests = []int{10, 100, 1000, 10000}
+var tests = []int{10, 100, 1000}
 
 type BenchmarkData struct {
 	Val1  string
@@ -58,7 +59,7 @@ func createData(n int) []*BenchmarkData {
 			val4[k] = fmt.Sprintf("string map val4, %d, %d", j, i)
 		}
 		d := BenchmarkData{
-			Val1:  fmt.Sprintf("string val1, %d", i),
+			Val1:  fmt.Sprintf("string val1, %d, 1kb data: %s", i, strings.Repeat("a", 1024)),
 			Val2:  i * 2,
 			Val3:  val3,
 			Val4:  val4,
@@ -79,17 +80,21 @@ func createData(n int) []*BenchmarkData {
 func BenchmarkSimpleQueueEnqueueDequeue(b *testing.B) {
 	for _, tt := range tests {
 		b.Run(fmt.Sprintf("Size%d", tt), func(b *testing.B) {
-			dir := fmt.Sprintf("testdata/benchmark/simple_queue/single/%d/ffq", tt)
+			dir, _ := os.MkdirTemp("", "ffqbenchtest")
 			data := createData(tt)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
-				q, _ := ffq.NewQueue[BenchmarkData](
+				q, err := ffq.NewQueue[BenchmarkData](
 					"benchmark",
 					ffq.WithFileDir(dir),
-					ffq.WithQueueSize(1000),
-					ffq.WithMaxPages(3),
+					ffq.WithQueueSize(1024),
+					ffq.WithMaxPage(3),
 				)
+				if err != nil {
+					panic(err)
+				}
+
 				q.WaitInitialize()
 				var wg sync.WaitGroup
 				wg.Add(2)
@@ -124,11 +129,11 @@ func BenchmarkSimpleQueueEnqueueDequeue(b *testing.B) {
 }
 
 func BenchmarkSimpleQueueBulkEnqueueDequeue(b *testing.B) {
-	size := 100
+	var size uint64 = 100
 	lazy := 10 * time.Millisecond
 	for _, tt := range tests {
 		b.Run(fmt.Sprintf("Size%d", tt), func(b *testing.B) {
-			dir := fmt.Sprintf("testdata/benchmark/simple_queue/bulk/%d/ffq", tt)
+			dir, _ := os.MkdirTemp("", "ffqbenchtest")
 			data := createData(tt)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
@@ -136,8 +141,8 @@ func BenchmarkSimpleQueueBulkEnqueueDequeue(b *testing.B) {
 				q, _ := ffq.NewQueue[BenchmarkData](
 					"benchmark",
 					ffq.WithFileDir(dir),
-					ffq.WithQueueSize(1000),
-					ffq.WithMaxPages(3),
+					ffq.WithQueueSize(1024),
+					ffq.WithMaxPage(3),
 				)
 				q.WaitInitialize()
 				var wg sync.WaitGroup
@@ -172,21 +177,139 @@ func BenchmarkSimpleQueueBulkEnqueueDequeue(b *testing.B) {
 	}
 }
 
-func BenchmarkGroupQueueEnqueueDequeue_3Group(b *testing.B) {
-	testQueues := []string{"queue1", "queue2", "queue3"}
+func BenchmarkSimpleQueueEnqueueDequeue_5MP(b *testing.B) {
 	for _, tt := range tests {
 		b.Run(fmt.Sprintf("Size%d", tt), func(b *testing.B) {
-			dir := fmt.Sprintf("testdata/benchmark/group_queue/single/%d/ffq", tt)
+			dir, _ := os.MkdirTemp("", "ffqbenchtest")
 			data := createData(tt)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
-				total := len(data) * len(testQueues)
+				q, err := ffq.NewQueue[BenchmarkData](
+					"benchmark",
+					ffq.WithFileDir(dir),
+					ffq.WithQueueSize(1024),
+					ffq.WithMaxPage(3),
+					ffq.WithQueueType(ffq.MPSC),
+				)
+				if err != nil {
+					panic(err)
+				}
+
+				q.WaitInitialize()
+				var wg sync.WaitGroup
+				var wgEnqueue sync.WaitGroup
+				wg.Add(2)
+
+				b.StartTimer()
+				go func(wg *sync.WaitGroup) {
+					defer wg.Done()
+					for i := 0; i < 5; i++ {
+						wgEnqueue.Add(1)
+						go func(wg *sync.WaitGroup) {
+							defer wg.Done()
+							for _, d := range data {
+								q.Enqueue(d)
+							}
+						}(&wgEnqueue)
+					}
+					wgEnqueue.Wait()
+					q.CloseQueue()
+				}(&wg)
+				go func(wg *sync.WaitGroup) {
+					defer wg.Done()
+					for {
+						m, err := q.Dequeue()
+						if ffq.IsErrQueueClose(err) {
+							q.CloseIndex()
+							return
+						} else {
+							q.UpdateIndex(m)
+						}
+					}
+				}(&wg)
+				wg.Wait()
+				b.StopTimer()
+
+				os.RemoveAll(dir)
+			}
+		})
+	}
+}
+
+func BenchmarkSimpleQueueBulkEnqueueDequeue_5MP(b *testing.B) {
+	var size uint64 = 100
+	lazy := 10 * time.Millisecond
+	for _, tt := range tests {
+		b.Run(fmt.Sprintf("Size%d", tt), func(b *testing.B) {
+			dir, _ := os.MkdirTemp("", "ffqbenchtest")
+			data := createData(tt)
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				q, _ := ffq.NewQueue[BenchmarkData](
+					"benchmark",
+					ffq.WithFileDir(dir),
+					ffq.WithQueueSize(1024),
+					ffq.WithMaxPage(3),
+					ffq.WithQueueType(ffq.MPSC),
+				)
+				q.WaitInitialize()
+				var wg sync.WaitGroup
+				var wgEnqueue sync.WaitGroup
+				wg.Add(2)
+
+				b.StartTimer()
+
+				go func(wg *sync.WaitGroup) {
+					defer wg.Done()
+					for i := 0; i < 5; i++ {
+						wgEnqueue.Add(1)
+						go func(wg *sync.WaitGroup) {
+							defer wg.Done()
+							q.BulkEnqueue(data)
+						}(&wgEnqueue)
+					}
+					wgEnqueue.Wait()
+					q.CloseQueue()
+				}(&wg)
+				go func(wg *sync.WaitGroup) {
+					defer wg.Done()
+					for {
+						ms, err := q.BulkDequeue(size, lazy)
+						if ffq.IsErrQueueClose(err) {
+							q.CloseIndex()
+							return
+						} else {
+							if len(ms) > 0 {
+								q.UpdateIndex(ms[len(ms)-1])
+							}
+						}
+					}
+				}(&wg)
+				wg.Wait()
+				b.StopTimer()
+
+				os.RemoveAll(dir)
+			}
+		})
+	}
+}
+
+func BenchmarkGroupQueueEnqueueDequeue_5Group(b *testing.B) {
+	testQueues := []string{"queue1", "queue2", "queue3", "queue4", "queue5"}
+	for _, tt := range tests {
+		b.Run(fmt.Sprintf("Size%d", tt), func(b *testing.B) {
+			dir, _ := os.MkdirTemp("", "ffqbenchtest")
+			data := createData(tt)
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
 				gq, _ := ffq.NewGroupQueue[BenchmarkData](
 					"benchmark",
 					ffq.WithFileDir(dir),
-					ffq.WithQueueSize(1000),
-					ffq.WithMaxPages(3),
+					ffq.WithQueueSize(1024),
+					ffq.WithMaxPage(3),
 				)
 				gq.WaitInitialize()
 				var wg sync.WaitGroup
@@ -212,17 +335,14 @@ func BenchmarkGroupQueueEnqueueDequeue_3Group(b *testing.B) {
 				go func(wg *sync.WaitGroup) {
 					defer wg.Done()
 					for {
-						mc, err := gq.Dequeue()
+						m, err := gq.Dequeue()
 						if err != nil {
 							if ffq.IsErrQueueClose(err) {
 								gq.CloseIndex()
+								return
 							}
-							return
 						}
-						for m := range mc {
-							gq.UpdateIndex(m)
-							total--
-						}
+						gq.UpdateIndex(m)
 					}
 				}(&wg)
 				wg.Wait()
@@ -234,23 +354,22 @@ func BenchmarkGroupQueueEnqueueDequeue_3Group(b *testing.B) {
 	}
 }
 
-func BenchmarkGroupQueueBulkEnqueueDequeue_3Group(b *testing.B) {
-	testQueues := []string{"queue1", "queue2", "queue3"}
+func BenchmarkGroupQueueBulkEnqueueDequeue_5Group(b *testing.B) {
+	testQueues := []string{"queue1", "queue2", "queue3", "queue4", "queue5"}
 	size := 100
 	lazy := 10 * time.Millisecond
 	for _, tt := range tests {
 		b.Run(fmt.Sprintf("Size%d", tt), func(b *testing.B) {
-			dir := fmt.Sprintf("testdata/benchmark/group_queue/bulk/%d/ffq", tt)
+			dir, _ := os.MkdirTemp("", "ffqbenchtest")
 			data := createData(tt)
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
-				total := len(data) * len(testQueues)
 				gq, _ := ffq.NewGroupQueue[BenchmarkData](
 					"benchmark",
 					ffq.WithFileDir(dir),
-					ffq.WithQueueSize(1000),
-					ffq.WithMaxPages(3),
+					ffq.WithQueueSize(1024),
+					ffq.WithMaxPage(3),
 				)
 				gq.WaitInitialize()
 				var wg sync.WaitGroup
@@ -272,19 +391,16 @@ func BenchmarkGroupQueueBulkEnqueueDequeue_3Group(b *testing.B) {
 				}(&wg)
 				go func(wg *sync.WaitGroup) {
 					defer wg.Done()
-					for 0 < total {
-						msc, err := gq.BulkDequeue(size, lazy)
+					for {
+						ms, err := gq.BulkDequeue(uint64(size), lazy)
 						if err != nil {
 							if ffq.IsErrQueueClose(err) {
 								gq.CloseIndex()
+								return
 							}
-							return
 						}
-						for ms := range msc {
-							if len(ms) > 0 {
-								gq.UpdateIndex(ms[len(ms)-1])
-							}
-							total -= len(ms)
+						for _, m := range ms {
+							gq.UpdateIndex(m)
 						}
 					}
 				}(&wg)
