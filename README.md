@@ -6,7 +6,7 @@
     </picture>
 </div>
 
-FFQ (File-Based FIFO Queue) is a file-based system for managing FIFO queues. FFQ is developed using only the standard modules of Golang, without relying on any external modules or libraries. As a result, there is no need to manage dependencies, making it simple and lightweight. FFQ provides a simple and high-level API, making it easy to perform queue operations. With support for generics, you can enqueue data of any type into the queue. FFQ is designed for high performance, with speed primarily dependent on serialization and I/O during queue operations. By default, FFQ uses json.Marshal and json.Unmarshal for serialization, but you can customize it by providing functions with compatible interfaces for serialization and deserialization.  
+FFQ (File-Based FIFO Queue) is a file-based system for managing FIFO queues. FFQ is developed using only the standard modules of Golang, without relying on any external modules or libraries. As a result, there is no need to manage dependencies, making it simple and lightweight. FFQ provides a simple and high-level API, making it easy to perform queue operations. With support for generics, you can enqueue data of any type into the queue. FFQ is designed for high performance , with speed primarily dependent on serialization and I/O during queue operations (almost lock-free, completely lock-free using SPSC). By default, FFQ uses json.Marshal and json.Unmarshal for serialization, but you can customize it by providing functions with compatible interfaces for serialization and deserialization.  
 Since FFQ stores the queue on files, even if the system goes down, you can resume reading from the queue without losing the progress of dequeued items. This implementation ensures reliability and data persistence, allowing seamless continuation from where you left off.
 
 [![](https://img.shields.io/github/actions/workflow/status/nihiyama/ffq/test.yaml?branch=main&longCache=true&label=Test&logo=github%20actions&logoColor=fff)](https://github.com/nihiyama/ffq/actions?query=workflow%3ATest)
@@ -22,6 +22,66 @@ For detailed usage, you can refer to the [code examples](./examples/README.md) o
 
 
 ### Simple Queue
+
+For simplicity, the combination of Enqueue/Dequeue and BulkEnqueue/BulkDequeue is presented; however, feel free to　mix and match them to suit your use case.
+
+#### Enqueue/Dequeue
+
+```go
+func main() {
+    // Data is a struct with any field.
+    q, err := NewQueue[Data]("example")
+    if err != nil {
+        // catch serious error
+        panic(err)
+    }
+
+    var wg sync.WaitGroup
+
+    // startup dequeue goroutine
+    wg.Add(1)
+    go func(wg *sync.WaitGroup) {
+        defer wg.Done()
+        for {
+            // continue to dequeue repeatedly
+            m, err := q.Dequeue()
+            if err != nil {
+                if ffq.IsErrQueueClose(err) {
+                    // if qeueu is closed, close index and finish goroutine
+                    q.CloseIndex()
+                    return
+                }
+            }
+            q.UpdateIndex(m)
+        }
+    }(&wg)
+
+    // Initialization is performed after starting the dequeue goroutine 
+    // and before starting the enqueue goroutine.
+    // This ensures that data that has not yet been dequeued can be safely dequeued.
+    q.WaitInitialize()
+
+    // startup enqueue goroutine
+    wg.Add(1)
+    go func(wg *sync.WaitGroup) {
+        defer wg.Done()
+        // data has []*Data type.
+        data := makeData()
+
+        // enqueue
+        for _, d := range data {
+            q.Enqueue(d)
+        }
+
+        // finally, queueu is closed
+        q.CloseQueue()
+    }(&wg)
+
+    wg.Wait()
+}
+```
+
+#### BulkEnqueue/BulkDequeue
 
 ```go
 func main() {
@@ -47,8 +107,6 @@ func main() {
                     q.CloseIndex()
                     return
                 }
-                // catch serious error
-                panic(err)
             }
             if len(ms) > 0 {
                 // update index
@@ -82,6 +140,10 @@ func main() {
 
 ### Group Queue
 
+For simplicity, the combination of Enqueue/Dequeue and BulkEnqueue/BulkDequeue, as with Simple Queue, is presented; however, feel free to mix and match them to suit your use case.
+
+#### Enqueue/Dequeue
+
 ```go
 func main() {
     // Data is a struct with any field.
@@ -99,21 +161,90 @@ func main() {
         defer wg.Done()
         for {
             // continue to dequeue repeatedly
-            // In groupqueue []*ffq.Message type is returned.
-            msc, err := gq.BulkDequeue(size, lazy)
+            m, err := gq.Dequeue()
             if err != nil {
                 if ffq.IsErrQueueClose(err) {
                     // if qeueu is closed, close index and finish goroutine
                     gq.CloseIndex()
                     return
                 }
-                // catch serious error
-                panic(err)
             }
-            for ms := range msc {
-                if len(ms) > 0 {
-                    // update index
-                    gq.UpdateIndex(ms[len(ms)-1])
+            gq.UpdateIndex(m)
+        }
+    }(&wg)
+
+    // Initialization is performed after starting the dequeue goroutine 
+    // and before starting the enqueue goroutine.
+    // This ensures that data that has not yet been dequeued can be safely dequeued.
+    gq.WaitInitialize()
+
+    // startup enqueue goroutine 1.
+    wg.Add(1)
+    go func(wg *sync.WaitGroup) {
+        defer wg.Done()
+        // data has []*Data type.
+        data := makeData()
+
+        // enqueue
+        for _, d := range data {
+            gq.Enqueue("q1", d)
+        }
+
+        // finally, queueu is closed
+        gq.CloseQueue()
+    }(&wg)
+
+    // startup enqueue goroutine 2.
+    wg.Add(1)
+    go func(wg *sync.WaitGroup) {
+        defer wg.Done()
+        // data has []*Data type.
+        data := makeData()
+
+        // enqueue
+        for _, d := range data {
+            gq.Enqueue("q2", d)
+        }
+
+        // finally, queueu is closed
+        gq.CloseQueue()
+    }(&wg)
+
+    wg.Wait()
+}
+```
+
+#### BulkEnqueue/BulkDequeue
+
+```go
+func main() {
+    // Data is a struct with any field.
+    gq, err := NewGroupQueue[Data]("example")
+    if err != nil {
+        // catch serious error
+        panic(err)
+    }
+
+    var wg sync.WaitGroup
+
+    // startup dequeue goroutine
+    wg.Add(1)
+    go func(wg *sync.WaitGroup) {
+        defer wg.Done()
+        for {
+            // continue to dequeue repeatedly
+            ms, err := gq.BulkDequeue(size, lazy)
+            if err != nil {
+                if ffq.IsErrQueueClose(err) {
+                    // if qeueu is closed, close index and finish goroutine
+                    gq.CloseIndex()
+                    return
+                }
+            }
+            if len(ms) > 0 {
+                // update index
+                for _, m := range ms {
+                    m.UpdateIndex(m)
                 }
             }
         }
@@ -168,6 +299,8 @@ Options include the following.
 | WithMaxPages | int | `2` | WithMaxPages sets the number of files used in a single rotation cycle. |
 | WithEncoder | func(v any) ([]byte, error) | `json.Marshal` | WithEncoder sets a custom encoder function |
 | WithDecoder | func(data []byte, v any) error | `json.Unmarshal` | WithDecoder sets a custom decoder function. |
+| WithQueueType | ffq.QueueType | `ffq.SPSC` | WithQueueType can use `ffq.SPSC` or `ffq.MPSC`. It is possible to switch between Single Producer Single Consumer and Multiple Producer Single Consumer. |
+| WithGroupSize | int | `10` | WithGroupSize sets a GroupQueue size. It can only be used with GroupQueue. |
 
 When you create an instance using the NewQueue or NewGroupQueue function you can give options.
 
@@ -184,6 +317,15 @@ func main() {
 
 > [!NOTE]  
 > Once the options are set and running, do not change them. Doing so may cause data inconsistencies. If you wish to change an option, make sure that there are no outstanding queues, and while ffq is not running, delete the entire queue management directory before changing the option.
+
+### Additional Settings
+
+Before creating an instance of Queue, you can perform the following configurations. Execute them as needed.
+
+| function name | type | default | detail |
+| --- | --- | --- | --- |
+| SetQueueBufferSize | int | 64kb | Buffer size used for writing to the Queue |
+| SetFSync | - | no fsync | Executes SetFSync to wait for the OS to complete writes |
 
 ## Architecture
 
