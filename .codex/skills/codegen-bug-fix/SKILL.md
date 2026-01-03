@@ -1,117 +1,117 @@
 ---
 name: codegen-bug-fix
-description: バグ修正を、README+Issue起点でTDD（codegen-test準拠）し、既存実装の流儀に合わせて、Serena MCPのセマンティック検索/編集を活用しつつ、高性能かつデータ競合に配慮して実装する。
+description: Fix bugs using TDD starting from README + Issue (following codegen-test), aligning with existing implementation conventions, and leveraging Serena MCP semantic search/editing to implement changes with high performance and race-safety in mind.
 ---
 
 # Codegen Bug Fix Skill
 
-## 目的
-- README.md と Issue を根拠に、バグの内容と対応方法を把握し、Go 実装を作る。
-- **テスト駆動**で進め、**既存コードの流儀**（命名・設計・構造・エラーハンドリング）に揃える。
-- Serena MCP のツールで「読む量を減らし、正確に探して編集」する。
+## Purpose
+- Understand the bug and the remediation approach based on README.md and the Issue, then produce a Go implementation.
+- Proceed in a **test-driven** manner and match the **existing code style** (naming, design, structure, error handling).
+- Use Serena MCP tools to “read less, find precisely, and edit accurately.”
 
-## いつ使うか
-- Issue に基づくバグ修正が必要なとき。
-- 既存の機能挙動を変えずに問題だけを修正したいとき。
-- パフォーマンスやデータ競合（race）に注意が必要な変更を含むとき。
+## When to use
+- When a bug fix is required based on an Issue.
+- When you want to fix only the problem without changing existing behavior.
+- When the change requires attention to performance or data races (race conditions).
 
-## 成果物（期待するアウトプット）
-- テストコードによりバグを再現し、修正を検証するための **テスト*（generate-test skill 準拠）を作成する
-- 失敗→成功へ遷移する **テスト**（generate-test skill 準拠）
-- テストを通す **プロダクションコード**
-  - テスト結果と静的解析が全て完了していること
-- README/コメント/ドキュメント更新（ただし最小限）
+## Deliverables (expected output)
+- Create **tests** that reproduce the bug and verify the fix (**conform to the generate-test skill**).
+- **Tests** that transition from failing → passing (**conform to the generate-test skill**).
+- **Production code** that makes the tests pass.
+  - All tests and static analysis must complete successfully.
+- Minimal README/comment/documentation updates (only if necessary)
 
 ---
 
-## 実行手順（必ずこの順で）
+## Execution steps (follow this order)
 
-### 0) 変更前の安全策
-- 既存 API/挙動を壊さない
-  - バグ修正が原因で仕様が変更されないようにする。
-  - Issue/README に根拠がある場合のみ変更する。
-  - 変更が必要な場合は、確認を求める。
-- 変更範囲は最小。ついでのリファクタは絶対に行わない。
-  - refactorが必要な場合は別Issueを作成する。
-  - Issueの作成にはgithub mcpを利用する。
+### 0) Safety measures before changes
+- Do not break existing APIs/behavior.
+  - Ensure the fix does not unintentionally change the specification.
+  - Only change behavior when there is clear evidence in the Issue/README.
+  - If a behavior change is necessary, ask for confirmation.
+- Keep changes minimal. Do **not** do opportunistic refactors.
+  - If refactoring is needed, create a separate Issue.
+  - Use GitHub MCP to create the Issue.
 
-### 1) Issue を特定して要求を確定する（README + Issue を読む）
-1. **現在のブランチ名**を取得する:
+### 1) Identify the Issue and confirm requirements (read README + Issue)
+1. Get the **current branch name**:
   - `git rev-parse --abbrev-ref HEAD`
-2. ブランチ名から **Issue番号を抽出**する（例）:
+2. Extract the **Issue number** from the branch name (example):
   - `feature/issue-<issue_number>-`
-3. Issue を読む
-  - github mcpを利用する。
-4. README.md / CONTRIBUTING / docs から **期待する使い方・制約・互換性**を確認する。
-5. 受け入れ条件を「箇条書き」で確定し、**テスト観点**に変換する。
-  - テスト観点は`codegen-test`skillに準拠する。
+3. Read the Issue
+  - Use GitHub MCP.
+4. Check README.md / CONTRIBUTING / docs for the **expected usage, constraints, and compatibility**.
+5. Finalize acceptance criteria as bullet points and convert them into **test perspectives**.
+  - Test perspectives must follow the `codegen-test` skill.
 
-> Issue番号が抽出できない場合は、README/Issue一覧/PR/コミットメッセージから手がかりを探し、それでも不明なら「どのIssueを対象にするか」をユーザーに確認する。
+> If you cannot extract the Issue number, look for clues in README / Issue list / PRs / commit messages. If still unclear, ask the user which Issue should be targeted.
 
-### 2) 既存コードの流儀を探す（grep + Serena）
-**目的:** 既存パターン（構造体、エラー、戻り値、命名、テストスタイル）に合わせる。
+### 2) Find the project’s existing style (grep + Serena)
+**Goal:** Match existing patterns (structs, errors, return values, naming, test style).
 
-- まず grep / git grep で “入口” を作る:
+- First, create an “entry point” using grep / git grep:
   - `grep -En "keyword|TypeName|funcName" -r .`
   - `grep -En --include='*.go' "keyword|TypeName|funcName" -r .`
   - `git grep -nE "keyword|TypeName|funcName" -- '*.go'`
-- 次に Serena MCP を使い、読み過ぎずに “正解の場所” を特定する:
-  - `get_symbols_overview`（プロジェクトの主要シンボル俯瞰）
-  - `find_symbol`（型/関数/メソッド定義へ）
-  - `find_referencing_symbols`（呼び出し箇所・利用箇所へ）
-  - `insert_after_symbol` / `replace_symbol_body` 等で **ピンポイント編集**
-  - 大きいファイルの全読みは避け、必要箇所だけ取得する
+- Then use Serena MCP to locate the “right place” without over-reading:
+  - `get_symbols_overview` (high-level symbol overview)
+  - `find_symbol` (jump to type/function/method definitions)
+  - `find_referencing_symbols` (find call sites/usages)
+  - Use `insert_after_symbol` / `replace_symbol_body` etc. for **pinpoint edits**
+  - Avoid reading entire large files; fetch only what you need
 
-### 3) テストを先に作る（generate-test skill に従う）
-- **最初にまずバグを再現するテストを追加**し、失敗することを確認する（red）。
-- テスト方針:
-  - テーブル駆動（正常/異常/境界値）
-  - 依存を注入できる設計（testable）
-    - ただし、interfaceを多用しないこと。
-    - シンプルな設計を心がけること。
-  - 外部I/Oは interface 化・mock 化・in-memory 化する
-    - 外部モジュールは利用しないこと。
-- この工程は `codegen-test` skill の指示を **最優先**で適用する。
+### 3) Write tests first (follow the generate-test skill)
+- **First, add a test that reproduces the bug** and confirm it fails (red).
+- Test strategy:
+  - Table-driven tests (happy path / error cases / boundary values)
+  - A testable design with injectable dependencies
+    - But do not overuse interfaces.
+    - Keep the design simple.
+  - For external I/O, use interfaces/mocks/in-memory approaches
+    - Do not use external modules.
+- In this step, the `codegen-test` skill instructions are the **top priority**.
 
-### 4) 実装する（最小・高性能・Goらしく）
-**設計原則**
-- 命名は **短く、一語で意味が分かる**ようにする。曖昧な単語や長過ぎる複合語を避ける。
-- `gofmt` / `gopls` に従い、標準ライブラリを優先する。
-- ロジックよりも **データ構造**を先に考え、問題に適した構造を選択することで性能と保守性を高める。
-- if/elseのネストを避け、early return/ハッピーパスを利用したコードにする。
-- バグ修正は既存コードに最小限の変更を加えるだけに留め、新機能を追加しない。
+### 4) Implement (minimal changes, high performance, idiomatic Go)
+**Design principles**
+- Keep names **short and unambiguous**, so the meaning is clear in a single word. Avoid vague words or overly long compounds.
+- Follow `gofmt` / `gopls`, and prefer the standard library.
+- Think about **data structures first**, then logic—choose structures suited to the problem to improve performance and maintainability.
+- Avoid nested if/else; prefer early returns and happy-path flows.
+- A bug fix should be minimal: do not add new features.
 
-**性能チェックリスト（必要なものを選んで適用）**
-- 余計なアロケーションを避ける:
-  - スライスは必要なら `make([]T, 0, n)` で capacity 予約
-  - ループ内で `append` し続けるなら capacity を見積もる
-- set には `map[string]struct{}` を使う（値を持たない）  
-- “ゼロコピー” を意識:
-  - `[]byte`↔`string` 変換をむやみに繰り返さない（境界で一回に寄せる）
-  - 大きいデータは参照渡し/スライスで扱う
-- ホットパスで `fmt.Sprintf` を多用しない。必要なら `strings.Builder` や `bytes.Buffer` を検討する。
+**Performance checklist (apply as needed)**
+- Avoid unnecessary allocations:
+  - Pre-allocate slices when appropriate: `make([]T, 0, n)`
+  - Estimate capacity if appending in loops
+- Use `map[string]struct{}` for sets (no value payload)
+- Aim for “zero-copy”:
+  - Avoid repeated `[]byte`↔`string` conversions (do it once at boundaries)
+  - Handle large data via references/slices
+- Do not overuse `fmt.Sprintf` in hot paths; consider `strings.Builder` or `bytes.Buffer` when needed.
 
-### 5) テスト・静的チェック・レースチェック
-- テスト(race込み)
+### 5) Tests, static checks, and race checks
+- Run tests (including race checks):
   - `task go:test`
-- 性能影響が大きい部分の修正時はテストを行う:
+- If the change might impact performance, run benchmarks:
   - `task go:bench`
 
-### 6) データ競合（race）を避けるルール
-- 共有状態の読み書きを明示し、以下のいずれかで守る:
+### 6) Rules to avoid data races
+- Make reads/writes to shared state explicit and protect them with one of:
   - mutex / RWMutex
-  - channel による所有権移譲
-  - atomic（適用条件を満たす場合のみ）
-- “見かけ上安全” な map/slice の共有をしない（読み取り専用でも構築タイミングに注意）。
-- 競合しやすい箇所は **テストで並行実行**（`t.Parallel()` や goroutine）して再現性を上げる。
+  - ownership transfer via channels
+  - atomic (only when applicable)
+- Do not share “apparently safe” maps/slices (even read-only requires careful construction timing).
+- Increase reproducibility by running concurrency in tests (`t.Parallel()` and/or goroutines) for race-prone areas.
 
 ---
 
-## 最後に出力するレポート（短く）
-- レポートとしてマークダウンで出力する
-  - ファイル名：`<Issue番号>_<日時>_bug_fix_report.md`
-- Issue要約（受け入れ条件）
-- 変更点（ファイル単位）
-- 追加したテストの観点
-- 実行したコマンド
-- パフォーマンス/競合面で気をつけた点（該当があれば）
+## Final report output (keep it short)
+- Output as a Markdown report:
+  - Filename: `<issue_number>_<datetime>_bug_fix_report.md`
+- Issue summary (acceptance criteria)
+- Changes (by file)
+- Added test perspectives
+- Commands executed
+- Performance/race considerations (if applicable)

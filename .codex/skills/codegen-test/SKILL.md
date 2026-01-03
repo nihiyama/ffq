@@ -1,109 +1,109 @@
 ---
 name: codegen-test
-description: テスト駆動開発でGoのテストコードを作成するときに利用するスキル。README/Issueと既存テストの流儀に従い、テーブル駆動＋振る舞い/境界値/分岐観点をバランス良く追加し、過剰なモックやカバレッジ至上主義を避けて保守性の高いテストを作る。
+description: A skill for writing Go tests in a TDD workflow. Follow README/Issue requirements and existing test conventions, add a balanced set of table-driven cases across behavior/boundaries/branches, and produce maintainable tests without excessive mocking or coverage-chasing.
 ---
 
 # Codegen Test Skill
 
-## 目的
-- README.md / Issue を根拠に仕様（期待する振る舞い）を固定し、TDD の **Red → Green → Refactor** を回す。
-- Go らしい、読みやすく保守しやすいテスト（テーブル駆動・subtest・小さな helper）を作る。
-- 分岐網羅だけに偏らず、**境界値・ブラックボックス（振る舞い）・回帰**の観点を追加する。
-- カバレッジを「目的」にしない。保守性を下げるテストは書かない。
-- mock に極力頼らず、古典派（classicist）寄りで実装する。
+## Purpose
+- Lock down the spec (expected behavior) based on README.md / Issue and run **Red → Green → Refactor**.
+- Write idiomatic, readable, maintainable Go tests (table-driven, subtests, small helpers).
+- Avoid focusing only on branch coverage; also add **boundary**, **black-box (behavior)**, and **regression** perspectives.
+- Do not make coverage the “goal.” Do not write tests that reduce maintainability.
+- Avoid mocks as much as possible; implement in a more classicist style.
 
-## いつ使うか
-- 機能追加（feature）・バグ修正（bugfix）・リファクタ（refactor）で、最初にテストを作りたいとき。
-- 既存コードの仕様が曖昧で、テストで合意形成（仕様固定）したいとき。
-- 回帰テストを追加し、再発防止したいとき。
+## When to use
+- When you want to write tests first for a feature, bug fix, or refactor.
+- When existing behavior is unclear and you want to build consensus (freeze the spec) via tests.
+- When you want to add regression tests to prevent recurrence.
 
-## 成果物（期待するアウトプット）
-- 失敗→成功へ遷移するテスト（Red→Green が確認できる）
-- 既存のテストスタイルに揃ったテストコード
-- 実行したコマンド（go test / race / 必要なら bench）と簡単な結果メモ
+## Deliverables (expected output)
+- Tests that transition from failing → passing (Red → Green is observable)
+- Test code aligned with the project’s existing test style
+- Commands executed (go test / race / optionally bench) and brief result notes
 
 ---
 
-## 実行手順（必ずこの順で）
+## Execution steps (follow this order)
 
-### 0) 変更前の安全策
-- テストは仕様（契約）になる。README/Issue と矛盾しないこと。
-- 既存のテストが「事実上の仕様」になっている場合は、それを優先して壊さない。
-- 追加するテストは最小限で開始し、必要な観点を段階的に増やす。
+### 0) Safety measures before changes
+- Tests become the spec (contract). Do not contradict README/Issue.
+- If existing tests act as the de-facto spec, prioritize and do not break them.
+- Start with the minimum necessary tests, then incrementally add perspectives as needed.
 
-### 1) 仕様理解（README.md / Issue）
-- README.md / docs / コメント / Issue から、受け入れ条件（期待する振る舞い）を箇条書きで確定する。
-- 以下に分解して整理する（可能ならそのままテストケース名へ）:
-  - 正常系の代表ケース
-  - 異常系（入力不正、前提崩れ、依存失敗）
-  - 境界値（空、0、最大/最小、off-by-one）
-  - 並行性（同時実行、順序、共有状態）
-  - 互換性（過去仕様の維持、回帰防止）
+### 1) Understand the spec (README.md / Issue)
+- From README.md / docs / comments / Issue, finalize acceptance criteria (expected behavior) as bullet points.
+- Break them down (ideally usable as test case names):
+  - Representative happy-path cases
+  - Error cases (invalid input, broken preconditions, dependency failures)
+  - Boundary values (empty, 0, min/max, off-by-one)
+  - Concurrency (simultaneous execution, ordering, shared state)
+  - Compatibility (preserve past behavior, regression prevention)
 
-### 2) 既存テストの流儀を踏襲（最重要）
-- 他の外部モジュールを利用しない
-- 既存の `_test.go` を検索し、下記を必ず揃える:
-  - パッケージ名（`package x` / `package x_test`）
-  - assertion 方針（標準 `testing` か、既存で使っている assertion ライブラリか）
-  - テーブル駆動の書き方（`tests` / `tt`、フィールド名の付け方）
-  - helper の置き場所、命名、fixture の作り方
-  - テストデータ配置（testdata/ の有無）
+### 2) Follow existing test conventions (highest priority)
+- Do not introduce additional external modules.
+- Search existing `_test.go` files and match the following:
+  - Package style (`package x` vs `package x_test`)
+  - Assertion approach (stdlib `testing` vs an existing assertion library already used)
+  - Table-driven style (`tests` / `tt`, field naming patterns)
+  - Helper locations, naming, fixture patterns
+  - Test data layout (whether `testdata/` exists)
 
-※このスキルは「新ルールを押し付ける」のではなく、既存流儀に合わせることを優先する。
+*This skill is not about imposing new rules; it prioritizes matching the existing conventions.*
 
-### 3) テスト設計（方針）
-- 基本はブラックボックス（公開 API の振る舞い）をテストする。
-- 内部実装の詳細（private 関数、内部状態）を直接テストしない。
-  - 例外: 性能やデータ競合など「外から観測しづらい重要要件」がある場合のみ、最小限で補助する。
-- 自明なテストは書かない（型を確認するなど）
+### 3) Test design principles
+- Prefer black-box testing (behavior of the public API).
+- Do not directly test implementation details (private functions/internal state).
+  - Exception: Only when “hard to observe from the outside” requirements matter (e.g., performance or race-safety), and only with minimal supplemental tests.
+- Do not write trivial tests (e.g., “assert the type”).
 
-### 4) テーブル駆動テストを基本形にする
-- 同じロジックで複数条件を検証する場合はテーブル駆動にする。
-- 推奨の構造:
+### 4) Use table-driven tests as the default shape
+- If multiple conditions exercise the same logic, use a table-driven test.
+- Recommended structure:
   - `tests := []struct{ name string; input ...; want ... }{ ... }`
   - `for _, tt := range tests { t.Run(tt.name, func(t *testing.T) { ... }) }`
-- フィールド名は `input` / `want` プレフィックスを基本にする。
-- テーブル内に関数や複雑な分岐（shouldX, setupMocks func...）を詰め込まない。
-  - 複雑になったら「テーブルを分割」または「Test 関数を分割」する。
+- Prefer `input` / `want` prefixes for field names.
+- Do not stuff functions or complex branching (e.g., `shouldX`, `setupMocks func...`) into the table.
+  - If it becomes complex, split the table or split the test function.
 
-### 5) 分岐網羅（白箱） + 振る舞い/境界（黒箱）を両立する
-- 分岐網羅: if/switch の各分岐が少なくとも1回は通るようにケースを配置する。
-- 境界値: 空・最小・最大・境界直前/直後（off-by-one）を追加する。
-- 振る舞い: “何が守られるべきか” をテスト名に含め、読み手が理解できるようにする。
+### 5) Balance branch coverage (white-box) with behavior/boundaries (black-box)
+- Branch coverage: ensure each if/switch branch is exercised at least once.
+- Boundaries: add empty/min/max and just-before/just-after cases (off-by-one).
+- Behavior: include “what must be guaranteed” in the test name so it’s understandable to readers.
 
-### 6) モックを極力避ける（古典派）
-- 原則: “本物に近いもの” を使う。
-  - 例: in-memory 実装、`bytes.Buffer`、`httptest`、`t.TempDir()`、`net.Pipe()` など
-- interface を増やしすぎない（設計の歪み・保守性低下につながる）。
-- どうしても外部依存を切る必要がある場合は、最小の境界で差し替える。
-  - 大規模な mock 設定が必要なら、テスト対象の分割（小さな単位へ）を優先検討する。
+### 6) Avoid mocks as much as possible (classicist)
+- Principle: use something “close to real.”
+  - Examples: in-memory implementations, `bytes.Buffer`, `httptest`, `t.TempDir()`, `net.Pipe()`
+- Do not over-introduce interfaces (often harms design and maintainability).
+- If external dependencies must be cut, swap them at the smallest boundary.
+  - If large mock setups are required, prefer splitting the unit under test into smaller components.
 
-### 7) 並行テスト（必要なときだけ、慎重に）
-- 競合しうる箇所は `-race` で検証できる形にする。
-- `t.Parallel()` を使う場合は、ループ変数の再束縛を徹底する:
-  - `tt := tt` を `t.Run` の直前で行う（キャプチャ事故防止）。
-- 並行ケースは “何を保証したいか”（データ競合なし、順序、冪等性など）を明示する。
+### 7) Concurrency tests (only when needed, carefully)
+- Make race-prone areas verifiable with `-race`.
+- If using `t.Parallel()`, always rebind loop variables:
+  - Do `tt := tt` immediately before `t.Run` to avoid capture bugs.
+- For concurrent cases, explicitly state what is being guaranteed (no races, ordering, idempotency, etc.).
 
-### 8) 実行と確認（必須）
-- まず対象パッケージ（または全体）のテスト(raceを含む):
+### 8) Run and verify (required)
+- Run package-level (or full) tests including race checks:
   - `task go:test`
-- 性能が論点なら bench を追加/実行（必要なときだけ）:
+- If performance is a key concern, add/run benchmarks (only when necessary):
   - `task go:bench`
 ---
 
-## 禁止事項（やらない）
-- カバレッジを上げるためだけの、読みにくい/壊れやすいテスト
-- テーブルテスト内の複雑な条件分岐・過剰なフラグ（保守性低下）
-- 実装詳細に密結合したテスト（リファクタ耐性がない）
-- 不要な interface 追加や、大量の mock 依存
+## Prohibited (do not do)
+- Tests that are hard to read/brittle written only to raise coverage
+- Complex branching inside table-driven tests or excessive flags (hurts maintainability)
+- Tests tightly coupled to implementation details (not refactor-friendly)
+- Unnecessary interfaces or heavy reliance on mocks
 
 ---
 
-## テストコードとテストの考え方に関して出力するレポート（短く）
-- レポートとしてマークダウンで出力する
-  - ファイル名：`<Issue番号>_<日時>_test_report.md`
-- 含める内容:
-  - 仕様要約（README/Issue の受け入れ条件）
-  - 追加したテスト観点（分岐/境界/振る舞い/回帰/並行）
-  - 実行したコマンド（test / race / bench）
-  - 意図的に「書かなかったテスト」（過剰なモック等）の理由（必要なら）
+## Final report about test code and approach (keep it short)
+- Output as a Markdown report:
+  - Filename: `<issue_number>_<datetime>_test_report.md`
+- Include:
+  - Spec summary (acceptance criteria from README/Issue)
+  - Added test perspectives (branches/boundaries/behavior/regression/concurrency)
+  - Commands executed (test / race / bench)
+  - Reasons for tests intentionally not written (e.g., avoiding excessive mocks), if needed
