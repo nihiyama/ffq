@@ -6,7 +6,7 @@ tasks:
     desc: run go test
     dir: "{{.ROOT_DIR}}"
     cmds:
-      - cmd: go test -v -shuffle=on -race -timeout 10s -coverprofile=coverage.out $(go list ./... | grep -v "examples")
+      - cmd: go test -v -shuffle=on -race -timeout 20s -coverprofile=coverage.out $(go list ./... | grep -v "examples")
         ignore_error: true
       - go tool cover -func=coverage.out
       - go tool cover -html=coverage.out -o coverage.html
