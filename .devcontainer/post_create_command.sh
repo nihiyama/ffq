@@ -7,4 +7,7 @@ sudo apt update
 sudo apt install -y graphviz
 
 # install taskfile
-go install github.com/go-task/task/v3/cmd/task@latest
+npm install -g @go-task/cli
+
+# install codex
+npm install -g @openai/codex
