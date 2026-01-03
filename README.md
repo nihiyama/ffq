@@ -338,25 +338,61 @@ A dataset with 12 keys was prepared, where each key has corresponding string, in
 ```
 goos: linux
 goarch: arm64
-pkg: github.com/nihiyama/ffq/ringbuffer
-BenchmarkSimpleQueueEnqueueDequeue/Size10-8                10000            146467 ns/op           40225 B/op        304 allocs/op
-BenchmarkSimpleQueueEnqueueDequeue/Size100-8                1530            777684 ns/op          402447 B/op       3006 allocs/op
-BenchmarkSimpleQueueEnqueueDequeue/Size1000-8                210           5514527 ns/op         3960243 B/op      30015 allocs/op
-BenchmarkSimpleQueueBulkEnqueueDequeue/Size10-8            22395             52355 ns/op           40308 B/op        281 allocs/op
-BenchmarkSimpleQueueBulkEnqueueDequeue/Size100-8            3025            395634 ns/op          475160 B/op       2714 allocs/op
-BenchmarkSimpleQueueBulkEnqueueDequeue/Size1000-8                    297           3941332 ns/op         5543107 B/op      27056 allocs/op
-BenchmarkSimpleQueueEnqueueDequeue_5MP/Size10-8                     3229            558267 ns/op          201044 B/op       1515 allocs/op
-BenchmarkSimpleQueueEnqueueDequeue_5MP/Size100-8                     297           3600200 ns/op         2020212 B/op      15029 allocs/op
-BenchmarkSimpleQueueEnqueueDequeue_5MP/Size1000-8                     31          32455408 ns/op        19861525 B/op     150117 allocs/op
-BenchmarkSimpleQueueBulkEnqueueDequeue_5MP/Size10-8                 4480            257337 ns/op          192031 B/op       1380 allocs/op
-BenchmarkSimpleQueueBulkEnqueueDequeue_5MP/Size100-8                 552           2095460 ns/op         2193344 B/op      13561 allocs/op
-BenchmarkSimpleQueueBulkEnqueueDequeue_5MP/Size1000-8                 52          21862708 ns/op        29965125 B/op     135308 allocs/op
-BenchmarkGroupQueueEnqueueDequeue_5Group/Size10-8                   1465            751427 ns/op          266635 B/op       1762 allocs/op
-BenchmarkGroupQueueEnqueueDequeue_5Group/Size100-8                   530           2222183 ns/op         2182742 B/op      15301 allocs/op
-BenchmarkGroupQueueEnqueueDequeue_5Group/Size1000-8                   94          12747984 ns/op        19951426 B/op     150356 allocs/op
-BenchmarkGroupQueueBulkEnqueueDequeue_5Group/Size10-8               2799            421194 ns/op          263407 B/op       1624 allocs/op
-BenchmarkGroupQueueBulkEnqueueDequeue_5Group/Size100-8               753           1662122 ns/op         3206951 B/op      13830 allocs/op
-BenchmarkGroupQueueBulkEnqueueDequeue_5Group/Size1000-8              111          10224487 ns/op        29013525 B/op     135512 allocs/op
+pkg: github.com/nihiyama/ffq/bench
+BenchmarkGoJSONSimpleQueueEnqueueDequeue/Size10-8                  10000            181210 ns/op           28741 B/op         44 allocs/op
+BenchmarkGoJSONSimpleQueueEnqueueDequeue/Size100-8                  1712            692693 ns/op          286619 B/op        407 allocs/op
+BenchmarkGoJSONSimpleQueueEnqueueDequeue/Size1000-8                  300           3857455 ns/op         2797539 B/op       4018 allocs/op
+BenchmarkGoJSONSimpleQueueBulkEnqueueDequeue/Size10-8              24903             49034 ns/op           29538 B/op         21 allocs/op
+BenchmarkGoJSONSimpleQueueBulkEnqueueDequeue/Size100-8              3540            296702 ns/op          455527 B/op        118 allocs/op
+BenchmarkGoJSONSimpleQueueBulkEnqueueDequeue/Size1000-8              454           2645481 ns/op         7374591 B/op       1068 allocs/op
+BenchmarkGoJSONSimpleQueueEnqueueDequeue_5MP/Size10-8               3736            530937 ns/op          144174 B/op        216 allocs/op
+BenchmarkGoJSONSimpleQueueEnqueueDequeue_5MP/Size100-8               421           2673111 ns/op         1442705 B/op       2036 allocs/op
+BenchmarkGoJSONSimpleQueueEnqueueDequeue_5MP/Size1000-8               45          23225262 ns/op        14019820 B/op      20127 allocs/op
+BenchmarkGoJSONSimpleQueueBulkEnqueueDequeue_5MP/Size10-8           5536            204298 ns/op          135926 B/op         81 allocs/op
+BenchmarkGoJSONSimpleQueueBulkEnqueueDequeue_5MP/Size100-8                   847           1387673 ns/op         1980260 B/op        573 allocs/op
+BenchmarkGoJSONSimpleQueueBulkEnqueueDequeue_5MP/Size1000-8                   78          15155019 ns/op        35761256 B/op       5355 allocs/op
+BenchmarkGoJSONGroupQueueEnqueueDequeue_5Group/Size10-8                     1976            708317 ns/op          207140 B/op        464 allocs/op
+BenchmarkGoJSONGroupQueueEnqueueDequeue_5Group/Size100-8                     627           1750355 ns/op         1600943 B/op       2322 allocs/op
+BenchmarkGoJSONGroupQueueEnqueueDequeue_5Group/Size1000-8                     98          11004677 ns/op        14102366 B/op      20367 allocs/op
+BenchmarkGoJSONGroupQueueBulkEnqueueDequeue_5Group/Size10-8                 3824            300221 ns/op          212297 B/op        326 allocs/op
+BenchmarkGoJSONGroupQueueBulkEnqueueDequeue_5Group/Size100-8                 829           1377020 ns/op         3243249 B/op        858 allocs/op
+BenchmarkGoJSONGroupQueueBulkEnqueueDequeue_5Group/Size1000-8                129           8533375 ns/op        35231912 B/op       5562 allocs/op
+BenchmarkJSONSimpleQueueEnqueueDequeue/Size10-8                            10000            231058 ns/op           40799 B/op        304 allocs/op
+BenchmarkJSONSimpleQueueEnqueueDequeue/Size100-8                            1443            861123 ns/op          405220 B/op       3007 allocs/op
+BenchmarkJSONSimpleQueueEnqueueDequeue/Size1000-8                            198           5934142 ns/op         3950594 B/op      30015 allocs/op
+BenchmarkJSONSimpleQueueBulkEnqueueDequeue/Size10-8                        17487             62894 ns/op           40425 B/op        281 allocs/op
+BenchmarkJSONSimpleQueueBulkEnqueueDequeue/Size100-8                        2642            431346 ns/op          488511 B/op       2715 allocs/op
+BenchmarkJSONSimpleQueueBulkEnqueueDequeue/Size1000-8                        294           3993813 ns/op         5721652 B/op      27056 allocs/op
+BenchmarkJSONSimpleQueueEnqueueDequeue_5MP/Size10-8                         2808            612809 ns/op          204116 B/op       1516 allocs/op
+BenchmarkJSONSimpleQueueEnqueueDequeue_5MP/Size100-8                         279           4034488 ns/op         2044779 B/op      15033 allocs/op
+BenchmarkJSONSimpleQueueEnqueueDequeue_5MP/Size1000-8                         32          32158689 ns/op        19854594 B/op     150107 allocs/op
+BenchmarkJSONSimpleQueueBulkEnqueueDequeue_5MP/Size10-8                     4473            268459 ns/op          193614 B/op       1381 allocs/op
+BenchmarkJSONSimpleQueueBulkEnqueueDequeue_5MP/Size100-8                     528           2246064 ns/op         2299095 B/op      13562 allocs/op
+BenchmarkJSONSimpleQueueBulkEnqueueDequeue_5MP/Size1000-8                     55          21459433 ns/op        27839735 B/op     135297 allocs/op
+BenchmarkJSONGroupQueueEnqueueDequeue_5Group/Size10-8                       1882            725399 ns/op          269376 B/op       1765 allocs/op
+BenchmarkJSONGroupQueueEnqueueDequeue_5Group/Size100-8                       525           2311979 ns/op         2185272 B/op      15303 allocs/op
+BenchmarkJSONGroupQueueEnqueueDequeue_5Group/Size1000-8                       86          14097208 ns/op        19934410 B/op     150354 allocs/op
+BenchmarkJSONGroupQueueBulkEnqueueDequeue_5Group/Size10-8                   3285            317469 ns/op          273905 B/op       1626 allocs/op
+BenchmarkJSONGroupQueueBulkEnqueueDequeue_5Group/Size100-8                   698           1626522 ns/op         3192447 B/op      13831 allocs/op
+BenchmarkJSONGroupQueueBulkEnqueueDequeue_5Group/Size1000-8                  111          10180737 ns/op        31272311 B/op     135521 allocs/op
+BenchmarkSonicJSONSimpleQueueEnqueueDequeue/Size10-8                       10000            182738 ns/op           33547 B/op         54 allocs/op
+BenchmarkSonicJSONSimpleQueueEnqueueDequeue/Size100-8                       1268            793526 ns/op          317641 B/op        506 allocs/op
+BenchmarkSonicJSONSimpleQueueEnqueueDequeue/Size1000-8                       249           4663699 ns/op         2883757 B/op       5012 allocs/op
+BenchmarkSonicJSONSimpleQueueBulkEnqueueDequeue/Size10-8                   21866             56680 ns/op           31869 B/op         22 allocs/op
+BenchmarkSonicJSONSimpleQueueBulkEnqueueDequeue/Size100-8                   3098            359794 ns/op          371931 B/op        114 allocs/op
+BenchmarkSonicJSONSimpleQueueBulkEnqueueDequeue/Size1000-8                   320           3644208 ns/op        11093796 B/op       1069 allocs/op
+BenchmarkSonicJSONSimpleQueueEnqueueDequeue_5MP/Size10-8                    3592            570777 ns/op          165500 B/op        265 allocs/op
+BenchmarkSonicJSONSimpleQueueEnqueueDequeue_5MP/Size100-8                    367           2962512 ns/op         1574216 B/op       2527 allocs/op
+BenchmarkSonicJSONSimpleQueueEnqueueDequeue_5MP/Size1000-8                    39          26188324 ns/op        14512105 B/op      25088 allocs/op
+BenchmarkSonicJSONSimpleQueueBulkEnqueueDequeue_5MP/Size10-8                5238            222071 ns/op          143110 B/op         85 allocs/op
+BenchmarkSonicJSONSimpleQueueBulkEnqueueDequeue_5MP/Size100-8                685           1665518 ns/op         1713373 B/op        562 allocs/op
+BenchmarkSonicJSONSimpleQueueBulkEnqueueDequeue_5MP/Size1000-8                54          21254885 ns/op        52341309 B/op       5385 allocs/op
+BenchmarkSonicJSONGroupQueueEnqueueDequeue_5Group/Size10-8                  1948            710172 ns/op          256895 B/op        514 allocs/op
+BenchmarkSonicJSONGroupQueueEnqueueDequeue_5Group/Size100-8                  620           1786605 ns/op         1770529 B/op       2783 allocs/op
+BenchmarkSonicJSONGroupQueueEnqueueDequeue_5Group/Size1000-8                  96          11790819 ns/op        14796516 B/op      25320 allocs/op
+BenchmarkSonicJSONGroupQueueBulkEnqueueDequeue_5Group/Size10-8              3591            313545 ns/op          251767 B/op        329 allocs/op
+BenchmarkSonicJSONGroupQueueBulkEnqueueDequeue_5Group/Size100-8              858           1307271 ns/op         2398778 B/op        817 allocs/op
+BenchmarkSonicJSONGroupQueueBulkEnqueueDequeue_5Group/Size1000-8             115          10232173 ns/op        56570411 B/op       5574 allocs/op
 PASS
-ok      github.com/nihiyama/ffq/ringbuffer      51.898s
+ok      github.com/nihiyama/ffq/bench   177.265s
 ```

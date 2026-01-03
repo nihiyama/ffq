@@ -14,14 +14,14 @@ tasks:
 
   bench:
     desc: run go benchmark
-    dir: "{{.ROOT_DIR}}"
+    dir: "{{.ROOT_DIR}}/bench"
     cmds:
-      - go test -benchmem -run=^$ -bench ^Benchmark github.com/nihiyama/ffq
+      - go test -benchmem -run=^$ -bench ^Benchmark .
     silent: true
 
   bench-cpu:
     desc: run go benchmark
-    dir: "{{.ROOT_DIR}}"
+    dir: "{{.ROOT_DIR}}/bench"
     cmds:
       - go test -benchmem -cpuprofile profile.out -run=^$ -bench ^Benchmark github.com/nihiyama/ffq
       - go tool pprof -http=:8080 profile.out
