@@ -2,6 +2,7 @@ package ffq
 
 import (
 	"bufio"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -274,6 +275,342 @@ func TestNewQueue_withInitialize(t *testing.T) {
 			q.CloseQueue()
 			q.CloseIndex()
 		})
+	}
+}
+
+func TestInitializeSkipsDecodeBeforeStartTail(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ffqtest")
+	defer removeAll(dir, t)
+
+	queueFilepath := filepath.Join(dir, fmt.Sprintf("%s.%d", queueFilename, 0))
+	if err := os.WriteFile(queueFilepath, []byte("[\"bad\"]\n"), 0644); err != nil {
+		t.Fatalf("failed to write queue file: %v", err)
+	}
+
+	indexFilepath := filepath.Join(dir, indexFilename)
+	indexFile, err := os.OpenFile(indexFilepath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		t.Fatalf("failed to create index file: %v", err)
+	}
+	if err := binary.Write(indexFile, binary.LittleEndian, uint64(0)); err != nil {
+		indexFile.Close()
+		t.Fatalf("failed to write index: %v", err)
+	}
+	if err := indexFile.Close(); err != nil {
+		t.Fatalf("failed to close index file: %v", err)
+	}
+
+	decoder := func(data []byte, v any) error {
+		return fmt.Errorf("decoder should not be called")
+	}
+	q, err := NewQueue[TestData]("testQueue", WithFileDir(dir), WithDecoder(decoder))
+	if err != nil {
+		t.Fatalf("unexpected error state: %v", err)
+	}
+	defer q.CloseQueue()
+	defer q.CloseIndex()
+
+	q.WaitInitialize()
+	if q.Length() != 0 {
+		t.Errorf("queue length got = %d, want = 0", q.Length())
+	}
+}
+
+func TestInitializeSkipsDecodeBeforeStartTailNoNewline(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ffqtest")
+	defer removeAll(dir, t)
+
+	queueFilepath := filepath.Join(dir, fmt.Sprintf("%s.%d", queueFilename, 0))
+	if err := os.WriteFile(queueFilepath, []byte("[\"bad\"]"), 0644); err != nil {
+		t.Fatalf("failed to write queue file: %v", err)
+	}
+
+	indexFilepath := filepath.Join(dir, indexFilename)
+	indexFile, err := os.OpenFile(indexFilepath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		t.Fatalf("failed to create index file: %v", err)
+	}
+	if err := binary.Write(indexFile, binary.LittleEndian, uint64(0)); err != nil {
+		indexFile.Close()
+		t.Fatalf("failed to write index: %v", err)
+	}
+	if err := indexFile.Close(); err != nil {
+		t.Fatalf("failed to close index file: %v", err)
+	}
+
+	decoder := func(data []byte, v any) error {
+		return fmt.Errorf("decoder should not be called")
+	}
+	q, err := NewQueue[TestData]("testQueue", WithFileDir(dir), WithDecoder(decoder))
+	if err != nil {
+		t.Fatalf("unexpected error state: %v", err)
+	}
+	defer q.CloseQueue()
+	defer q.CloseIndex()
+
+	q.WaitInitialize()
+	if q.Length() != 0 {
+		t.Errorf("queue length got = %d, want = 0", q.Length())
+	}
+}
+
+func TestInitializeSkipsDecodeBeforeStartTailMultiLineEOF(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ffqtest")
+	defer removeAll(dir, t)
+
+	queueFilepath := filepath.Join(dir, fmt.Sprintf("%s.%d", queueFilename, 0))
+	queueData := "[\"bad\"]\n" +
+		"[\"bad\"]\n" +
+		"[\"bad\"]"
+	if err := os.WriteFile(queueFilepath, []byte(queueData), 0644); err != nil {
+		t.Fatalf("failed to write queue file: %v", err)
+	}
+
+	indexFilepath := filepath.Join(dir, indexFilename)
+	indexFile, err := os.OpenFile(indexFilepath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		t.Fatalf("failed to create index file: %v", err)
+	}
+	if err := binary.Write(indexFile, binary.LittleEndian, uint64(2)); err != nil {
+		indexFile.Close()
+		t.Fatalf("failed to write index: %v", err)
+	}
+	if err := indexFile.Close(); err != nil {
+		t.Fatalf("failed to close index file: %v", err)
+	}
+
+	decoder := func(data []byte, v any) error {
+		return fmt.Errorf("decoder should not be called")
+	}
+	q, err := NewQueue[TestData]("testQueue", WithFileDir(dir), WithDecoder(decoder))
+	if err != nil {
+		t.Fatalf("unexpected error state: %v", err)
+	}
+	defer q.CloseQueue()
+	defer q.CloseIndex()
+
+	q.WaitInitialize()
+	if q.Length() != 0 {
+		t.Errorf("queue length got = %d, want = 0", q.Length())
+	}
+}
+
+func TestInitializeDecodesFromStartTailNoNewline(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ffqtest")
+	defer removeAll(dir, t)
+
+	queueFilepath := filepath.Join(dir, fmt.Sprintf("%s.%d", queueFilename, 0))
+	queueData := "[{\"Name\":\"a\",\"Value\":0},{\"Name\":\"b\",\"Value\":1}]"
+	if err := os.WriteFile(queueFilepath, []byte(queueData), 0644); err != nil {
+		t.Fatalf("failed to write queue file: %v", err)
+	}
+
+	indexFilepath := filepath.Join(dir, indexFilename)
+	indexFile, err := os.OpenFile(indexFilepath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		t.Fatalf("failed to create index file: %v", err)
+	}
+	if err := binary.Write(indexFile, binary.LittleEndian, uint64(0)); err != nil {
+		indexFile.Close()
+		t.Fatalf("failed to write index: %v", err)
+	}
+	if err := indexFile.Close(); err != nil {
+		t.Fatalf("failed to close index file: %v", err)
+	}
+
+	var called atomic.Bool
+	decoder := func(data []byte, v any) error {
+		called.Store(true)
+		return json.Unmarshal(data, v)
+	}
+	q, err := NewQueue[TestData]("testQueue", WithFileDir(dir), WithDecoder(decoder))
+	if err != nil {
+		t.Fatalf("unexpected error state: %v", err)
+	}
+	defer q.CloseQueue()
+	defer q.CloseIndex()
+
+	q.WaitInitialize()
+	if !called.Load() {
+		t.Fatalf("decoder should be called for items at or after startTail")
+	}
+	if q.Length() != 1 {
+		t.Fatalf("queue length got = %d, want = 1", q.Length())
+	}
+	m, err := q.Dequeue()
+	if err != nil {
+		t.Fatalf("unexpected error state: %v", err)
+	}
+	if m.Item().Value != 1 {
+		t.Errorf("item got = %d, want = 1", m.Item().Value)
+	}
+	if m.Index() != 1 {
+		t.Errorf("index got = %d, want = 1", m.Index())
+	}
+}
+
+func TestInitializeDecodesFromStartTail(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ffqtest")
+	defer removeAll(dir, t)
+
+	queueFilepath := filepath.Join(dir, fmt.Sprintf("%s.%d", queueFilename, 0))
+	queueData := "[{\"Name\":\"a\",\"Value\":0},{\"Name\":\"b\",\"Value\":1},{\"Name\":\"c\",\"Value\":2}]\n"
+	if err := os.WriteFile(queueFilepath, []byte(queueData), 0644); err != nil {
+		t.Fatalf("failed to write queue file: %v", err)
+	}
+
+	indexFilepath := filepath.Join(dir, indexFilename)
+	indexFile, err := os.OpenFile(indexFilepath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		t.Fatalf("failed to create index file: %v", err)
+	}
+	if err := binary.Write(indexFile, binary.LittleEndian, uint64(0)); err != nil {
+		indexFile.Close()
+		t.Fatalf("failed to write index: %v", err)
+	}
+	if err := indexFile.Close(); err != nil {
+		t.Fatalf("failed to close index file: %v", err)
+	}
+
+	var called atomic.Bool
+	decoder := func(data []byte, v any) error {
+		called.Store(true)
+		return json.Unmarshal(data, v)
+	}
+	q, err := NewQueue[TestData]("testQueue", WithFileDir(dir), WithDecoder(decoder))
+	if err != nil {
+		t.Fatalf("unexpected error state: %v", err)
+	}
+	defer q.CloseQueue()
+	defer q.CloseIndex()
+
+	q.WaitInitialize()
+	if !called.Load() {
+		t.Fatalf("decoder should be called for items at or after startTail")
+	}
+	if q.Length() != 2 {
+		t.Fatalf("queue length got = %d, want = 2", q.Length())
+	}
+	m1, err := q.Dequeue()
+	if err != nil {
+		t.Fatalf("unexpected error state: %v", err)
+	}
+	m2, err := q.Dequeue()
+	if err != nil {
+		t.Fatalf("unexpected error state: %v", err)
+	}
+	if m1.Item().Value != 1 || m2.Item().Value != 2 {
+		t.Errorf("items got = [%d %d], want = [1 2]", m1.Item().Value, m2.Item().Value)
+	}
+	if m1.Index() != 1 || m2.Index() != 2 {
+		t.Errorf("indexes got = [%d %d], want = [1 2]", m1.Index(), m2.Index())
+	}
+}
+
+func TestInitializeDecodesFromStartTailMultiLine(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ffqtest")
+	defer removeAll(dir, t)
+
+	queueFilepath := filepath.Join(dir, fmt.Sprintf("%s.%d", queueFilename, 0))
+	queueData := "[{\"Name\":\"a\",\"Value\":\"bad\"},{\"Name\":\"b\",\"Value\":\"bad\"}]\n" +
+		"[{\"Name\":\"c\",\"Value\":2},{\"Name\":\"d\",\"Value\":3},{\"Name\":\"e\",\"Value\":4}]\n"
+	if err := os.WriteFile(queueFilepath, []byte(queueData), 0644); err != nil {
+		t.Fatalf("failed to write queue file: %v", err)
+	}
+
+	indexFilepath := filepath.Join(dir, indexFilename)
+	indexFile, err := os.OpenFile(indexFilepath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		t.Fatalf("failed to create index file: %v", err)
+	}
+	if err := binary.Write(indexFile, binary.LittleEndian, uint64(2)); err != nil {
+		indexFile.Close()
+		t.Fatalf("failed to write index: %v", err)
+	}
+	if err := indexFile.Close(); err != nil {
+		t.Fatalf("failed to close index file: %v", err)
+	}
+
+	q, err := NewQueue[TestData]("testQueue", WithFileDir(dir))
+	if err != nil {
+		t.Fatalf("unexpected error state: %v", err)
+	}
+	defer q.CloseQueue()
+	defer q.CloseIndex()
+
+	q.WaitInitialize()
+	if q.Length() != 2 {
+		t.Fatalf("queue length got = %d, want = 2", q.Length())
+	}
+	m1, err := q.Dequeue()
+	if err != nil {
+		t.Fatalf("unexpected error state: %v", err)
+	}
+	m2, err := q.Dequeue()
+	if err != nil {
+		t.Fatalf("unexpected error state: %v", err)
+	}
+	if m1.Item().Value != 3 || m2.Item().Value != 4 {
+		t.Errorf("items got = [%d %d], want = [3 4]", m1.Item().Value, m2.Item().Value)
+	}
+	if m1.Index() != 3 || m2.Index() != 4 {
+		t.Errorf("indexes got = [%d %d], want = [3 4]", m1.Index(), m2.Index())
+	}
+}
+
+func TestInitializeDecodesFromStartTailPageBoundary(t *testing.T) {
+	dir, _ := os.MkdirTemp("", "ffqtest")
+	defer removeAll(dir, t)
+
+	queueFilepath0 := filepath.Join(dir, fmt.Sprintf("%s.%d", queueFilename, 0))
+	queueData0 := "[{\"Name\":\"a\",\"Value\":\"bad\"},{\"Name\":\"b\",\"Value\":\"bad\"},{\"Name\":\"c\",\"Value\":\"bad\"}]\n"
+	if err := os.WriteFile(queueFilepath0, []byte(queueData0), 0644); err != nil {
+		t.Fatalf("failed to write queue file: %v", err)
+	}
+
+	queueFilepath1 := filepath.Join(dir, fmt.Sprintf("%s.%d", queueFilename, 1))
+	queueData1 := "[{\"Name\":\"d\",\"Value\":3},{\"Name\":\"e\",\"Value\":4}]\n"
+	if err := os.WriteFile(queueFilepath1, []byte(queueData1), 0644); err != nil {
+		t.Fatalf("failed to write queue file: %v", err)
+	}
+
+	indexFilepath := filepath.Join(dir, indexFilename)
+	indexFile, err := os.OpenFile(indexFilepath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		t.Fatalf("failed to create index file: %v", err)
+	}
+	if err := binary.Write(indexFile, binary.LittleEndian, uint64(2)); err != nil {
+		indexFile.Close()
+		t.Fatalf("failed to write index: %v", err)
+	}
+	if err := indexFile.Close(); err != nil {
+		t.Fatalf("failed to close index file: %v", err)
+	}
+
+	q, err := NewQueue[TestData]("testQueue", WithFileDir(dir), WithQueueSize(3), WithMaxPage(2))
+	if err != nil {
+		t.Fatalf("unexpected error state: %v", err)
+	}
+	defer q.CloseQueue()
+	defer q.CloseIndex()
+
+	q.WaitInitialize()
+	if q.Length() != 2 {
+		t.Fatalf("queue length got = %d, want = 2", q.Length())
+	}
+	m1, err := q.Dequeue()
+	if err != nil {
+		t.Fatalf("unexpected error state: %v", err)
+	}
+	m2, err := q.Dequeue()
+	if err != nil {
+		t.Fatalf("unexpected error state: %v", err)
+	}
+	if m1.Item().Value != 3 || m2.Item().Value != 4 {
+		t.Errorf("items got = [%d %d], want = [3 4]", m1.Item().Value, m2.Item().Value)
+	}
+	if m1.Index() != 3 || m2.Index() != 4 {
+		t.Errorf("indexes got = [%d %d], want = [3 4]", m1.Index(), m2.Index())
 	}
 }
 

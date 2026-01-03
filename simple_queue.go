@@ -613,6 +613,32 @@ func (q *Queue[T]) Length() uint64 {
 	return uint64(len(q.queue))
 }
 
+func countJSONArrayItems(b []byte) (uint64, error) {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	tok, err := dec.Token()
+	if err != nil {
+		return 0, err
+	}
+	d, ok := tok.(json.Delim)
+	if !ok || d != '[' {
+		return 0, fmt.Errorf("expected JSON array")
+	}
+
+	var n uint64
+	for dec.More() {
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			return 0, err
+		}
+		n++
+	}
+
+	if _, err := dec.Token(); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 func (q *Queue[T]) initialize() {
 	var queueFile *os.File
 
@@ -648,9 +674,22 @@ func (q *Queue[T]) initialize() {
 			b, err := reader.ReadBytes('\n')
 			if err != nil {
 				if err == io.EOF {
-					break
+					if len(b) == 0 {
+						break
+					}
 				} else {
 					panic(fmt.Sprintf("could not read file, %v", err))
+				}
+			}
+			batchStart := itemNums + (currentPage * q.size)
+			if batchStart < startTail {
+				count, err := countJSONArrayItems(b)
+				if err != nil {
+					panic(fmt.Sprintf("could not count items, %s, %v", string(b), err))
+				}
+				if batchStart+count <= startTail {
+					itemNums += count
+					continue
 				}
 			}
 			var items []*T
