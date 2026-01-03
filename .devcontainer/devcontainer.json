@@ -6,7 +6,16 @@
 	"image": "mcr.microsoft.com/devcontainers/go:1-1.21-bookworm",
 
 	// Features to add to the dev container. More info: https://containers.dev/features.
-	// "features": {},
+	"features": {
+		"ghcr.io/devcontainers/features/github-cli:1": {},
+		"ghcr.io/va-h/devcontainers-features/uv:1": {
+			"shellAutocompletion": true
+		},
+		"ghcr.io/devcontainers/features/node:1": {
+			"version": "lts"
+		},
+		"ghcr.io/devcontainers/features/git:1": {}
+	},
 
 	// Use 'forwardPorts' to make a list of ports inside the container available locally.
 	// "forwardPorts": [],
@@ -20,7 +29,10 @@
 		"vscode": {
 			"extensions": [
 				"golang.go",
-				"task.vscode-task"
+				"task.vscode-task",
+				"openai.chatgpt",
+				"eamodio.gitlens",
+				"github.copilot-chat"
 			],
 			"settings": {}
 		}
