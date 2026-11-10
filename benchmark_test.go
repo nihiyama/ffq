@@ -11,6 +11,8 @@ import (
 	"github.com/nihiyama/ffq"
 )
 
+// Queue operation benchmarks.
+
 var tests = []int{10, 100, 1000}
 
 type BenchmarkData struct {
@@ -410,5 +412,78 @@ func BenchmarkGroupQueueBulkEnqueueDequeue_5Group(b *testing.B) {
 				os.RemoveAll(dir)
 			}
 		})
+	}
+}
+
+// Steady-state benchmarks.
+
+// Keep a queue open across b.N operations so page rotation is represented and
+// initialization does not dominate the measurement.
+func BenchmarkQueueSteadyState(b *testing.B) {
+	for _, producers := range []int{1, 4} {
+		for _, batch := range []int{1, 50} {
+			b.Run(fmt.Sprintf("Producers%d/Batch%d", producers, batch), func(b *testing.B) {
+				kind := ffq.SPSC
+				if producers > 1 {
+					kind = ffq.MPSC
+				}
+				q, err := ffq.NewQueue[BenchmarkData]("bench", ffq.WithFileDir(b.TempDir()), ffq.WithQueueSize(2048), ffq.WithMaxPage(3), ffq.WithQueueType(kind))
+				if err != nil {
+					b.Fatal(err)
+				}
+				data := createData(batch)
+				consumer := make(chan error, 1)
+				go func() {
+					for {
+						messages, err := q.BulkDequeue(50, 10*time.Millisecond)
+						if ffq.IsErrQueueClose(err) {
+							consumer <- q.CloseIndex()
+							return
+						}
+						if err != nil {
+							consumer <- err
+							return
+						}
+						if len(messages) > 0 {
+							if err := q.UpdateIndex(messages[len(messages)-1]); err != nil {
+								consumer <- err
+								return
+							}
+						}
+					}
+				}()
+				q.WaitInitialize()
+				b.ReportAllocs()
+				b.ResetTimer()
+				var wg sync.WaitGroup
+				for producer := 0; producer < producers; producer++ {
+					wg.Add(1)
+					go func(producer int) {
+						defer wg.Done()
+						for i := producer; i < b.N; i += producers {
+							var err error
+							if batch == 1 {
+								err = q.Enqueue(data[0])
+							} else {
+								err = q.BulkEnqueue(data)
+							}
+							if err != nil {
+								b.Error(err)
+								return
+							}
+						}
+					}(producer)
+				}
+				wg.Wait()
+				if err := q.CloseQueue(); err != nil {
+					b.Error(err)
+				}
+				if err := <-consumer; err != nil {
+					b.Error(err)
+				}
+				b.StopTimer()
+				b.ReportMetric(float64(b.N)*float64(batch)/b.Elapsed().Seconds(), "items/s")
+			})
+		}
 	}
 }

@@ -8,6 +8,7 @@ sudo apt install -y graphviz
 
 # install taskfile
 npm install -g @go-task/cli
+task --completion bash | sudo tee /etc/bash_completion.d/task
 
 # install codex
 npm install -g @openai/codex

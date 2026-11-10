@@ -4,9 +4,10 @@ package ffq
 // Message represents an item in the queue with its associated metadata.
 // It contains information about the page, index, queue name, and the item itself.
 type Message[T any] struct {
-	index uint64 // index of the message in the queue.
-	name  string // The name of the queue that owns this message.
-	item  *T     // The actual data item contained in the message.
+	index    uint64    // index of the message in the queue.
+	sequence uint64    // Absolute storage position; Index retains its circular semantics.
+	owner    *Queue[T] // Reject progress updates from another instance or an old open.
+	item     *T        // The actual data item contained in the message.
 }
 
 // Name returns the name of the queue to which the message belongs.
@@ -19,7 +20,10 @@ type Message[T any] struct {
 //	queueName := message.Name()
 //	fmt.Println(queueName)
 func (m *Message[T]) Name() string {
-	return m.name
+	if m.owner == nil {
+		return ""
+	}
+	return m.owner.name
 }
 
 // Index returns the index of the message in the queue.

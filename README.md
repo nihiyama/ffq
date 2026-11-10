@@ -7,7 +7,7 @@
 </div>
 
 FFQ (File-Based FIFO Queue) is a file-based system for managing FIFO queues. FFQ is developed using only the standard modules of Golang, without relying on any external modules or libraries. As a result, there is no need to manage dependencies, making it simple and lightweight. FFQ provides a simple and high-level API, making it easy to perform queue operations. With support for generics, you can enqueue data of any type into the queue. FFQ is designed for high performance , with speed primarily dependent on serialization and I/O during queue operations (almost lock-free, completely lock-free using SPSC). By default, FFQ uses json.Marshal and json.Unmarshal for serialization, but you can customize it by providing functions with compatible interfaces for serialization and deserialization. The queue file format assumes JSON arrays per line, so custom codecs must remain JSON-compatible; non-JSON formats are not supported.  
-Since FFQ stores the queue on files, even if the system goes down, you can resume reading from the queue without losing the progress of dequeued items. This implementation ensures reliability and data persistence, allowing seamless continuation from where you left off.
+FFQ stores queue data and dequeue progress in files. With a correctly maintained index and an unambiguous retained history, it can resume pending messages after restart. If recovery cannot determine the pending range safely, initialization reports an error and preserves the retained files; see the recovery limits below.
 
 [![](https://img.shields.io/github/actions/workflow/status/nihiyama/ffq/test.yaml?branch=main&longCache=true&label=Test&logo=github%20actions&logoColor=fff)](https://github.com/nihiyama/ffq/actions?query=workflow%3ATest)
 [![GoDoc](https://img.shields.io/badge/doc-reference-00ADD8.svg?logo=go)](https://pkg.go.dev/github.com/nihiyama/ffq)
@@ -18,8 +18,25 @@ Since FFQ stores the queue on files, even if the system goes down, you can resum
 
 We provide both SimpleQueue and GroupQueue. A GroupQueue is a collection of SimpleQueue instances, where each SimpleQueue is managed under a unique ID, allowing efficient management of multiple queues. For more information about each type of queue, please refer to the [Architecture section](#architecture). Choose the queue type that best suits your use case.
 
-For detailed usage, you can refer to the [code examples](./examples/README.md) or check the documentation on [GoDoc](https://pkg.go.dev/github.com/nihiyama/ffq).
+For runnable usage examples, refer to [usage_example_test.go](usage_example_test.go), which is included in the root test suite, or check the documentation on [GoDoc](https://pkg.go.dev/github.com/nihiyama/ffq).
 
+Start the consumer before calling `WaitInitializeWithError()`, check its error, and start producers only after it succeeds. It reports initialization errors, recorded failures, and `ErrQueueClose` if closed. The existing `WaitInitialize()` remains available for compatibility and only waits for completion; it does not indicate success. Handle non-close operation errors and release the queue and index when stopping.
+
+The samples below deliberately panic on startup and non-close operation errors so that a failure does not silently stop only the consumer. A nil startup result does not mean all recovered messages have finished processing or that later operations cannot fail. Keep checking enqueue, dequeue, progress-update, and close errors. For service-managed shutdown and error reporting, see the [lifecycle and error handling notes](docs/compatibility.md) ([日本語](docs/compatibility_ja.md)).
+
+Process messages before calling `UpdateIndex()`. For a bulk result, update the last completed message in each child queue (or update each completed message). `Length()` counts only buffered messages. Reusing a page may wait for persisted progress even after the consumer has removed its messages from the channel. Keep the consumer running while joining producers; close once after all producers finish, then close the index when the consumer exits.
+
+The file contract is unchanged: JSON arrays per line in `queue.N`, an 8-byte little-endian circular `index`, and a zero-byte index before the first progress update. No metadata files or migration are added. Recovery uses existing contents and timestamps. Some states cannot be distinguished when timestamps coincide or are unreliable; these return an error while preserving existing data instead of guessing or treating the queue as empty. This can include rapid writes followed by shutdown at a circular boundary. See the [recovery limits](docs/compatibility.md).
+
+The `FuncAfter*` helpers retain their existing callback/acknowledgment behavior. Use explicit processing followed by `UpdateIndex()` when a failed item must remain unacknowledged. Each directory needs one owner; concurrent enqueue/close and sharing a directory between processes are not supported shutdown/ownership protocols. Keep options unchanged across restart.
+
+`BulkDequeue` and `FuncAfterBulkDequeue` require a positive batch size in both queue types. A zero size returns an error recognized by `IsErrQueueOption` without waiting, consuming items, calling the callback, or updating progress. A one-item limit returns after the first item without waiting for `lazy`. The GroupQueue callback helpers return processing and index-update errors; their existing acknowledgment behavior still applies when the callback returns an error.
+
+After a normal GroupQueue close, both enqueue methods return an error recognized by `IsErrQueueClose` for existing and new child names, without creating a child. Use the error helpers rather than comparing error text. A previously recorded failure can take precedence over the close error.
+
+Runnable examples for the existing API are in [usage_example_test.go](usage_example_test.go).
+
+For the planned v0.3.0 → v0.3.1 update, see the [upgrade and release checklist](docs/v0.3.1-upgrade.md) ([日本語](docs/v0.3.1-upgrade_ja.md)).
 
 ### Simple Queue
 
@@ -30,7 +47,7 @@ For simplicity, the combination of Enqueue/Dequeue and BulkEnqueue/BulkDequeue i
 ```go
 func main() {
     // Data is a struct with any field.
-    q, err := NewQueue[Data]("example")
+    q, err := ffq.NewQueue[Data]("example")
     if err != nil {
         // catch serious error
         panic(err)
@@ -48,18 +65,21 @@ func main() {
             if err != nil {
                 if ffq.IsErrQueueClose(err) {
                     // if qeueu is closed, close index and finish goroutine
-                    q.CloseIndex()
+                    if err := q.CloseIndex(); err != nil { panic(err) }
                     return
                 }
+                panic(err)
             }
-            q.UpdateIndex(m)
+            // Process m.Item() successfully before persisting progress.
+            if err := q.UpdateIndex(m); err != nil { panic(err) }
         }
     }(&wg)
 
     // Initialization is performed after starting the dequeue goroutine 
     // and before starting the enqueue goroutine.
     // This ensures that data that has not yet been dequeued can be safely dequeued.
-    q.WaitInitialize()
+    // Start producers only after initialization succeeds.
+    if err := q.WaitInitializeWithError(); err != nil { panic(err) }
 
     // startup enqueue goroutine
     wg.Add(1)
@@ -70,11 +90,11 @@ func main() {
 
         // enqueue
         for _, d := range data {
-            q.Enqueue(d)
+            if err := q.Enqueue(d); err != nil { panic(err) }
         }
 
         // finally, queueu is closed
-        q.CloseQueue()
+        if err := q.CloseQueue(); err != nil { panic(err) }
     }(&wg)
 
     wg.Wait()
@@ -86,7 +106,7 @@ func main() {
 ```go
 func main() {
     // Data is a struct with any field.
-    q, err := NewQueue[Data]("example")
+    q, err := ffq.NewQueue[Data]("example")
     if err != nil {
         // catch serious error
         panic(err)
@@ -104,13 +124,14 @@ func main() {
             if err != nil {
                 if ffq.IsErrQueueClose(err) {
                     // if qeueu is closed, close index and finish goroutine
-                    q.CloseIndex()
+                    if err := q.CloseIndex(); err != nil { panic(err) }
                     return
                 }
+                panic(err)
             }
             if len(ms) > 0 {
-                // update index
-                q.UpdateIndex(ms[len(ms)-1])
+                // Process the batch successfully before persisting progress.
+                if err := q.UpdateIndex(ms[len(ms)-1]); err != nil { panic(err) }
             }
         }
     }(&wg)
@@ -118,7 +139,8 @@ func main() {
     // Initialization is performed after starting the dequeue goroutine 
     // and before starting the enqueue goroutine.
     // This ensures that data that has not yet been dequeued can be safely dequeued.
-    q.WaitInitialize()
+    // Start producers only after initialization succeeds.
+    if err := q.WaitInitializeWithError(); err != nil { panic(err) }
 
     // startup enqueue goroutine
     wg.Add(1)
@@ -128,10 +150,9 @@ func main() {
         data := makeData()
 
         // enqueue
-        q.BulkEnqueue(data)
-
+        if err := q.BulkEnqueue(data); err != nil { panic(err) }
         // finally, queueu is closed
-        q.CloseQueue()
+        if err := q.CloseQueue(); err != nil { panic(err) }
     }(&wg)
 
     wg.Wait()
@@ -147,13 +168,14 @@ For simplicity, the combination of Enqueue/Dequeue and BulkEnqueue/BulkDequeue, 
 ```go
 func main() {
     // Data is a struct with any field.
-    gq, err := NewGroupQueue[Data]("example")
+    gq, err := ffq.NewGroupQueue[Data]("example")
     if err != nil {
         // catch serious error
         panic(err)
     }
 
     var wg sync.WaitGroup
+    var producerWG sync.WaitGroup
 
     // startup dequeue goroutine
     wg.Add(1)
@@ -165,21 +187,24 @@ func main() {
             if err != nil {
                 if ffq.IsErrQueueClose(err) {
                     // if qeueu is closed, close index and finish goroutine
-                    gq.CloseIndex()
+                    if err := gq.CloseIndex(); err != nil { panic(err) }
                     return
                 }
+                panic(err)
             }
-            gq.UpdateIndex(m)
+            // Process m.Item() successfully before persisting progress.
+            if err := gq.UpdateIndex(m); err != nil { panic(err) }
         }
     }(&wg)
 
     // Initialization is performed after starting the dequeue goroutine 
     // and before starting the enqueue goroutine.
     // This ensures that data that has not yet been dequeued can be safely dequeued.
-    gq.WaitInitialize()
+    // Start producers only after initialization succeeds.
+    if err := gq.WaitInitializeWithError(); err != nil { panic(err) }
 
     // startup enqueue goroutine 1.
-    wg.Add(1)
+    producerWG.Add(1)
     go func(wg *sync.WaitGroup) {
         defer wg.Done()
         // data has []*Data type.
@@ -187,15 +212,13 @@ func main() {
 
         // enqueue
         for _, d := range data {
-            gq.Enqueue("q1", d)
+            if err := gq.Enqueue("q1", d); err != nil { panic(err) }
         }
 
-        // finally, queueu is closed
-        gq.CloseQueue()
-    }(&wg)
+    }(&producerWG)
 
     // startup enqueue goroutine 2.
-    wg.Add(1)
+    producerWG.Add(1)
     go func(wg *sync.WaitGroup) {
         defer wg.Done()
         // data has []*Data type.
@@ -203,13 +226,13 @@ func main() {
 
         // enqueue
         for _, d := range data {
-            gq.Enqueue("q2", d)
+            if err := gq.Enqueue("q2", d); err != nil { panic(err) }
         }
 
-        // finally, queueu is closed
-        gq.CloseQueue()
-    }(&wg)
+    }(&producerWG)
 
+    producerWG.Wait()
+    if err := gq.CloseQueue(); err != nil { panic(err) }
     wg.Wait()
 }
 ```
@@ -219,13 +242,14 @@ func main() {
 ```go
 func main() {
     // Data is a struct with any field.
-    gq, err := NewGroupQueue[Data]("example")
+    gq, err := ffq.NewGroupQueue[Data]("example")
     if err != nil {
         // catch serious error
         panic(err)
     }
 
     var wg sync.WaitGroup
+    var producerWG sync.WaitGroup
 
     // startup dequeue goroutine
     wg.Add(1)
@@ -237,14 +261,15 @@ func main() {
             if err != nil {
                 if ffq.IsErrQueueClose(err) {
                     // if qeueu is closed, close index and finish goroutine
-                    gq.CloseIndex()
+                    if err := gq.CloseIndex(); err != nil { panic(err) }
                     return
                 }
+                panic(err)
             }
             if len(ms) > 0 {
-                // update index
+                // Process the batch successfully before persisting progress.
                 for _, m := range ms {
-                    m.UpdateIndex(m)
+                    if err := gq.UpdateIndex(m); err != nil { panic(err) }
                 }
             }
         }
@@ -253,36 +278,33 @@ func main() {
     // Initialization is performed after starting the dequeue goroutine 
     // and before starting the enqueue goroutine.
     // This ensures that data that has not yet been dequeued can be safely dequeued.
-    gq.WaitInitialize()
+    // Start producers only after initialization succeeds.
+    if err := gq.WaitInitializeWithError(); err != nil { panic(err) }
 
     // startup enqueue goroutine 1.
-    wg.Add(1)
+    producerWG.Add(1)
     go func(wg *sync.WaitGroup) {
         defer wg.Done()
         // data has []*Data type.
         data := makeData()
 
         // enqueue
-        gq.BulkEnqueue("q1", data)
-
-        // finally, queueu is closed
-        gq.CloseQueue()
-    }(&wg)
+        if err := gq.BulkEnqueue("q1", data); err != nil { panic(err) }
+    }(&producerWG)
 
     // startup enqueue goroutine 2.
-    wg.Add(1)
+    producerWG.Add(1)
     go func(wg *sync.WaitGroup) {
         defer wg.Done()
         // data has []*Data type.
         data := makeData()
 
         // enqueue
-        gq.BulkEnqueue("q2", data)
+        if err := gq.BulkEnqueue("q2", data); err != nil { panic(err) }
+    }(&producerWG)
 
-        // finally, queueu is closed
-        gq.CloseQueue()
-    }(&wg)
-
+    producerWG.Wait()
+    if err := gq.CloseQueue(); err != nil { panic(err) }
     wg.Wait()
 }
 ```
@@ -295,8 +317,8 @@ Options include the following.
 | function name | type | default | detail |
 | --- | --- | --- | --- |
 | WithFileDir | string | `/tmp/ffq` | WithFileDir sets the directory where the queue files are stored. |
-| WithQueueSize | int | `100` | WithQueueSize sets the maximum number of items that can be held in the queue. |
-| WithMaxPages | int | `2` | WithMaxPages sets the number of files used in a single rotation cycle. |
+| WithQueueSize | uint64 | `1024` | WithQueueSize sets the maximum number of items that can be held in the queue. |
+| WithMaxPage | uint64 | `2` | WithMaxPage sets the number of files used in a single rotation cycle. |
 | WithEncoder | func(v any) ([]byte, error) | `json.Marshal` | WithEncoder sets a custom encoder function |
 | WithDecoder | func(data []byte, v any) error | `json.Unmarshal` | WithDecoder sets a custom decoder function. |
 | WithQueueType | ffq.QueueType | `ffq.SPSC` | WithQueueType can use `ffq.SPSC` or `ffq.MPSC`. It is possible to switch between Single Producer Single Consumer and Multiple Producer Single Consumer. |
@@ -332,6 +354,12 @@ Before creating an instance of Queue, you can perform the following configuratio
 comming soon...
 
 ## Benchmark
+
+`task go:bench` runs the codec benchmarks against the current checkout through the local replacement in `bench/go.mod`. The task prints the resolved ffq module before running; changes to this checkout are included without publishing a version. The figures below are historical measurements, not a result for every subsequent revision.
+
+For release comparisons, use the previous published ffq version as the baseline and keep the benchmark code and execution environment identical. Label comparisons between intermediate working-tree revisions separately; they do not replace the release comparison.
+
+The root package also provides `BenchmarkQueueSteadyState` and `BenchmarkQueueSteadyStateSync` for long-lived queues with 2048-item pages, three pages, and bulk sizes of 50. These can be run with `go test -run=^$ -bench '^BenchmarkQueueSteadyState(Sync)?$' -benchmem .`.
 
 A dataset with 12 keys was prepared, where each key has corresponding string, int, slice, and map values (more than 1kb). This dataset was used to conduct benchmark tests at four different scales: 10, 100 and 1000 data points.
 

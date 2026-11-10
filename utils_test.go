@@ -8,10 +8,10 @@ import (
 )
 
 func removeAll(dir string, t *testing.T) {
-	if r := recover(); r != nil {
-		t.Logf("panic occured, %v", r)
+	t.Helper()
+	if err := os.RemoveAll(dir); err != nil {
+		t.Errorf("cleanup failed: %v", err)
 	}
-	os.RemoveAll(dir)
 }
 
 func TestCreateQueueDir_alreadyExist(t *testing.T) {
@@ -36,7 +36,7 @@ func TestCreateQueueDir_notMkdirPermission(t *testing.T) {
 }
 
 func TestCreateQueueDir_notExist(t *testing.T) {
-	dir := filepath.Join(os.TempDir(), "dir")
+	dir := filepath.Join(t.TempDir(), "dir")
 	defer removeAll(dir, t)
 
 	err := createQueueDir(dir)

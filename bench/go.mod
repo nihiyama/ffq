@@ -2,6 +2,8 @@ module github.com/nihiyama/ffq/bench
 
 go 1.21.3
 
+replace github.com/nihiyama/ffq => ../
+
 require (
 	github.com/bytedance/sonic v1.12.8
 	github.com/goccy/go-json v0.10.5

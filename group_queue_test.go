@@ -1,14 +1,478 @@
 package ffq
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+// Group queue operations.
+
+func TestGroupWaitInitializeWithErrorFailures(t *testing.T) {
+	t.Run("one-good-one-bad-child", func(t *testing.T) {
+		dir := t.TempDir()
+		for name, data := range map[string]string{"good": "[1]\n", "bad": "["} {
+			child := filepath.Join(dir, name)
+			if err := os.Mkdir(child, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(child, "queue.0"), []byte(data), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		g, err := NewGroupQueue[int]("g", WithFileDir(dir), WithQueueSize(2))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { g.CloseQueue(); g.CloseIndex() }()
+		if err := g.WaitInitializeWithError(); !isRecoveryFailure(err) {
+			t.Fatalf("failed child accepted: %v", err)
+		}
+	})
+	t.Run("directory-list", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "file")
+		if err := os.WriteFile(path, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+		g := &GroupQueue[int]{fileDir: path, groupSize: 2, initializeBlock: make(chan struct{}), failureSig: make(chan struct{})}
+		go g.initialize()
+		if err := g.WaitInitializeWithError(); err == nil || IsErrQueueClose(err) {
+			t.Fatalf("directory failure: %v", err)
+		}
+		g.WaitInitialize()
+	})
+	t.Run("too-many-children", func(t *testing.T) {
+		dir := t.TempDir()
+		for _, name := range []string{"a", "b", "c"} {
+			if err := os.Mkdir(filepath.Join(dir, name), 0700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		g, err := NewGroupQueue[int]("g", WithFileDir(dir), WithGroupSize(2))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { g.CloseQueue(); g.CloseIndex() }()
+		if err := g.WaitInitializeWithError(); err == nil || IsErrQueueClose(err) {
+			t.Fatalf("capacity failure: %v", err)
+		}
+	})
+}
+
+func TestGroupClosedEnqueueErrors(t *testing.T) {
+	for _, kind := range []QueueType{SPSC, MPSC} {
+		for _, existing := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/existing=%t", kind, existing), func(t *testing.T) {
+				dir := t.TempDir()
+				g, err := NewGroupQueue[int]("closed", WithFileDir(dir), WithQueueSize(4), WithQueueType(kind))
+				if err != nil {
+					t.Fatal(err)
+				}
+				g.WaitInitialize()
+				defer g.CloseIndex()
+				value := 1
+				if existing {
+					if err := g.Enqueue("q", &value); err != nil {
+						t.Fatal(err)
+					}
+					m, err := g.Dequeue()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := g.UpdateIndex(m); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := g.CloseQueue(); err != nil {
+					t.Fatal(err)
+				}
+				for _, name := range []string{"q", "new"} {
+					for _, bulk := range []bool{false, true} {
+						t.Run(fmt.Sprintf("name=%s/bulk=%t", name, bulk), func(t *testing.T) {
+							var err error
+							if bulk {
+								err = g.BulkEnqueue(name, []*int{&value})
+							} else {
+								err = g.Enqueue(name, &value)
+							}
+							if !IsErrQueueClose(err) {
+								t.Fatalf("closed enqueue is not recognizable: %v", err)
+							}
+						})
+					}
+				}
+				entries, err := os.ReadDir(dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := 0
+				if existing {
+					want = 1
+				}
+				if len(entries) != want {
+					t.Fatal("closed enqueue created another child directory")
+				}
+			})
+		}
+	}
+}
+
+func TestBoundaryGroupBulkDistribution(t *testing.T) {
+	for _, children := range []int{0, 1, 2, 3, 4} {
+		for _, callback := range []bool{false, true} {
+			for _, limit := range []int{0, 1, 2, 3, 4, 5, 13} {
+				t.Run(fmt.Sprintf("children=%d/callback=%t/limit=%d", children, callback, limit), func(t *testing.T) {
+					capacity := children
+					if capacity == 0 {
+						capacity = 1
+					}
+					g, err := NewGroupQueue[int]("g", WithFileDir(t.TempDir()), WithQueueSize(4), WithMaxPage(2), WithGroupSize(capacity))
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { g.CloseQueue(); g.CloseIndex() })
+					g.WaitInitialize()
+					for child := 0; child < children; child++ {
+						if err := g.BulkEnqueue(fmt.Sprint(child), boundaryItems(child*10, 3)); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if err := g.CloseQueue(); err != nil {
+						t.Fatal(err)
+					}
+					seen := make([]int, children)
+					check := func(value int) {
+						child, sequence := value/10, value%10
+						if child < 0 || child >= children || sequence != seen[child] {
+							t.Fatalf("out of order/duplicate item %d; seen=%v", value, seen)
+						}
+						seen[child]++
+					}
+					count := 0
+					if callback {
+						var calledCount int
+						count, err = g.FuncAfterBulkDequeue(uint64(limit), time.Second, func(items []*int) error {
+							calledCount += len(items)
+							for _, item := range items {
+								check(*item)
+							}
+							return nil
+						})
+						if calledCount != count {
+							t.Fatalf("count=%d, callback received=%d", count, calledCount)
+						}
+					} else {
+						var messages []*Message[int]
+						messages, err = g.BulkDequeue(uint64(limit), time.Second)
+						count = len(messages)
+						for _, m := range messages {
+							check(*m.Item())
+							if m.Name() != fmt.Sprint(*m.Item()/10) {
+								t.Fatalf("message routed to wrong child: %q", m.Name())
+							}
+							if err := g.UpdateIndex(m); err != nil {
+								t.Fatal(err)
+							}
+						}
+					}
+					if children == 0 {
+						validError := IsErrQueueClose(err)
+						if limit == 0 {
+							validError = IsErrQueueOption(err)
+						}
+						if count != 0 || !validError {
+							t.Fatalf("closed empty group: count=%d, error=%v", count, err)
+						}
+						return
+					}
+					want := children * 3
+					if want > limit {
+						want = limit
+					}
+					validError := err == nil
+					if limit == 0 {
+						validError = IsErrQueueOption(err)
+					}
+					if !validError || count != want {
+						t.Fatalf("first batch: count=%d, error=%v, want=%d", count, err, want)
+					}
+					for child, received := range seen {
+						q, err := g.getQueue(fmt.Sprint(child))
+						if err != nil {
+							t.Fatal(err)
+						}
+						data, err := os.ReadFile(filepath.Join(q.fileDir, "index"))
+						if err != nil {
+							t.Fatal(err)
+						}
+						if received == 0 {
+							if len(data) != 0 {
+								t.Fatalf("untouched child %d was acknowledged", child)
+							}
+						} else if len(data) != 8 || binary.LittleEndian.Uint64(data) != uint64(received-1) {
+							t.Fatalf("child %d has wrong progress: %x, received=%d", child, data, received)
+						}
+					}
+					for {
+						m, err := g.Dequeue()
+						if IsErrQueueClose(err) {
+							break
+						}
+						if err != nil {
+							t.Fatal(err)
+						}
+						check(*m.Item())
+						if err := g.UpdateIndex(m); err != nil {
+							t.Fatal(err)
+						}
+					}
+					for child, received := range seen {
+						if received != 3 {
+							t.Errorf("child %d lost items: received=%d", child, received)
+						}
+					}
+					if err := g.CloseIndex(); err != nil {
+						t.Fatal(err)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestBoundaryGroupCapacity(t *testing.T) {
+	for _, limit := range []int{1, 2} {
+		t.Run(fmt.Sprintf("limit=%d", limit), func(t *testing.T) {
+			g, err := NewGroupQueue[int]("g", WithFileDir(t.TempDir()), WithGroupSize(limit), WithQueueSize(2))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { g.CloseQueue(); g.CloseIndex() })
+			g.WaitInitialize()
+			for i := 0; i < limit; i++ {
+				value := i * 10
+				if err := g.Enqueue(fmt.Sprint(i), &value); err != nil {
+					t.Fatal(err)
+				}
+			}
+			value := 999
+			if err := g.Enqueue("overflow", &value); err == nil {
+				t.Fatal("accepted a child beyond the configured limit")
+			}
+			if _, err := os.Stat(filepath.Join(g.fileDir, "overflow")); !os.IsNotExist(err) {
+				t.Fatalf("rejected child created a directory: %v", err)
+			}
+			if int(atomic.LoadUint32(&g.queueCount)) != limit {
+				t.Fatal("rejected child changed queue count")
+			}
+			value = 1
+			if err := g.Enqueue("0", &value); err != nil {
+				t.Fatalf("existing child rejected at group limit: %v", err)
+			}
+			if err := g.CloseQueue(); err != nil {
+				t.Fatal(err)
+			}
+			seen := make([]int, limit)
+			for {
+				m, err := g.Dequeue()
+				if IsErrQueueClose(err) {
+					break
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				child, sequence := *m.Item()/10, *m.Item()%10
+				if child >= limit || child < 0 || sequence != seen[child] || m.Name() != fmt.Sprint(child) {
+					t.Fatalf("unexpected message %d/%q, seen=%v", *m.Item(), m.Name(), seen)
+				}
+				seen[child]++
+				if err := g.UpdateIndex(m); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for child, count := range seen {
+				want := 1
+				if child == 0 {
+					want = 2
+				}
+				if count != want {
+					t.Errorf("child %d: count=%d, want %d", child, count, want)
+				}
+			}
+			if err := g.CloseIndex(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestGroupProgressRejectsInvalidMessages(t *testing.T) {
+	group, err := NewGroupQueue[int]("g", WithFileDir(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := NewGroupQueue[int]("other", WithFileDir(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { group.CloseQueue(); group.CloseIndex(); other.CloseQueue(); other.CloseIndex() })
+	group.WaitInitialize()
+	other.WaitInitialize()
+	value := 1
+	if err := group.Enqueue("a", &value); err != nil {
+		t.Fatal(err)
+	}
+	own, err := group.Dequeue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := other.Enqueue("a", &value); err != nil {
+		t.Fatal(err)
+	}
+	foreign, err := other.Dequeue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := other.Enqueue("unknown", &value); err != nil {
+		t.Fatal(err)
+	}
+	unknown, err := other.Dequeue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	q, err := group.getQueue("a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := diskSnapshot(t, q.fileDir)
+	for _, tc := range []struct {
+		name    string
+		message *Message[int]
+		missing bool
+	}{
+		{name: "nil"},
+		{name: "foreign instance with same name", message: foreign},
+		{name: "unknown queue name", message: unknown, missing: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := group.UpdateIndex(tc.message)
+			if err == nil || tc.missing && !IsErrQueueNotFound(err) || !tc.missing && !isProgressFailure(err) {
+				t.Fatalf("invalid progress result: %v", err)
+			}
+			if q.ackNext.Load() != 0 || !reflect.DeepEqual(diskSnapshot(t, q.fileDir), before) {
+				t.Fatal("invalid message changed data or progress")
+			}
+		})
+	}
+	if err := group.UpdateIndex(own); err != nil {
+		t.Fatalf("valid progress update: %v", err)
+	}
+}
+
+func TestGroupBulkPublicationWithoutPerItemNotifications(t *testing.T) {
+	for _, bulkConsumer := range []bool{false, true} {
+		for _, producers := range []int{1, 2} {
+			t.Run(fmt.Sprintf("bulk=%t/producers=%d", bulkConsumer, producers), func(t *testing.T) {
+				kind := SPSC
+				if producers > 1 {
+					kind = MPSC
+				}
+				gq, err := NewGroupQueue[int]("g", WithFileDir(t.TempDir()), WithQueueSize(2), WithMaxPage(3), WithQueueType(kind))
+				if err != nil {
+					t.Fatal(err)
+				}
+				seen := make([]int, producers)
+				done := make(chan error, 1)
+				go func() {
+					for {
+						var batch []*Message[int]
+						var err error
+						if bulkConsumer {
+							batch, err = gq.BulkDequeue(3, time.Millisecond)
+						} else {
+							var message *Message[int]
+							message, err = gq.Dequeue()
+							if message != nil {
+								batch = []*Message[int]{message}
+							}
+						}
+						if IsErrQueueClose(err) {
+							done <- gq.CloseIndex()
+							return
+						}
+						if err != nil {
+							done <- err
+							return
+						}
+						for _, message := range batch {
+							if message.Name() != "q" {
+								done <- fmt.Errorf("unexpected queue name: %q", message.Name())
+								return
+							}
+							value := *message.Item()
+							producer := value / 100
+							if producer >= len(seen) || value%100 != seen[producer] {
+								done <- fmt.Errorf("unexpected order: %d", value)
+								return
+							}
+							seen[producer]++
+							if err := gq.UpdateIndex(message); err != nil {
+								done <- err
+								return
+							}
+						}
+					}
+				}()
+				gq.WaitInitialize()
+				finished := make(chan error, producers)
+				for producer := 0; producer < producers; producer++ {
+					go func(producer int) {
+						items := make([]*int, 7)
+						for i := range items {
+							value := producer*100 + i
+							items[i] = &value
+						}
+						finished <- gq.BulkEnqueue("q", items)
+					}(producer)
+				}
+				for producer := 0; producer < producers; producer++ {
+					select {
+					case err := <-finished:
+						if err != nil {
+							t.Fatal(err)
+						}
+					case <-time.After(5 * time.Second):
+						gq.CloseQueue()
+						t.Fatal("bulk producer blocked")
+					}
+				}
+				if err := gq.CloseQueue(); err != nil {
+					t.Fatal(err)
+				}
+				select {
+				case err := <-done:
+					if err != nil {
+						t.Fatal(err)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("consumer did not stop")
+				}
+				for producer, count := range seen {
+					if count != 7 {
+						t.Fatalf("producer %d: consumed %d", producer, count)
+					}
+				}
+			})
+		}
+	}
+}
 
 func TestNewGroupQueue_withOptions(t *testing.T) {
 	tests := []struct {
@@ -411,28 +875,24 @@ func TestGroupBulkEnqueue(t *testing.T) {
 		name        string
 		enqueueNums int
 		bulkSize    int
-		dequeueNums int
 		wantTail    uint64
 	}{
 		{
 			name:        "simple enqueue",
 			enqueueNums: 8,
 			bulkSize:    5,
-			dequeueNums: 0 * len(queueNames),
 			wantTail:    8,
 		},
 		{
 			name:        "with file rotate",
 			enqueueNums: 15,
 			bulkSize:    7,
-			dequeueNums: 8 * len(queueNames),
 			wantTail:    15,
 		},
 		{
 			name:        "tail reset 0",
 			enqueueNums: 25,
 			bulkSize:    12,
-			dequeueNums: 18 * len(queueNames),
 			wantTail:    5,
 		},
 	}
@@ -452,12 +912,21 @@ func TestGroupBulkEnqueue(t *testing.T) {
 			dwg.Add(1)
 			go func(wg *sync.WaitGroup) {
 				defer wg.Done()
-				for i := 0; i < tt.dequeueNums; i++ {
+				for {
 					m, err := gq.Dequeue()
-					if err != nil {
-						t.Errorf("unexpected error state: %v", err)
+					if IsErrQueueClose(err) {
+						if err := gq.CloseIndex(); err != nil {
+							t.Errorf("close index: %v", err)
+						}
+						return
 					}
-					gq.UpdateIndex(m)
+					if err != nil {
+						t.Errorf("dequeue: %v", err)
+						return
+					}
+					if err := gq.UpdateIndex(m); err != nil {
+						t.Errorf("update index: %v", err)
+					}
 				}
 			}(&dwg)
 
@@ -670,6 +1139,12 @@ func TestGroupBulkDequeue(t *testing.T) {
 			size:        uint64(10),
 			lazy:        5 * time.Nanosecond,
 		},
+		{
+			name:        "size less than child count",
+			enqueueNums: 8,
+			size:        1,
+			lazy:        time.Millisecond,
+		},
 	}
 
 	for _, tt := range tests {
@@ -690,6 +1165,10 @@ func TestGroupBulkDequeue(t *testing.T) {
 
 			var ewg sync.WaitGroup
 			var dwg sync.WaitGroup
+			seen := make(map[string]int, len(queueNames))
+			for _, name := range queueNames {
+				seen[name] = 0
+			}
 			dwg.Add(1)
 			go func(wg *sync.WaitGroup) {
 				defer wg.Done()
@@ -700,9 +1179,27 @@ func TestGroupBulkDequeue(t *testing.T) {
 							break
 						}
 						t.Errorf("unexpected error state: %v", err)
+						return
+					}
+					if uint64(len(ms)) > tt.size {
+						t.Errorf("bulk limit exceeded: got %d, limit %d", len(ms), tt.size)
+						return
 					}
 					for _, m := range ms {
-						gq.UpdateIndex(m)
+						if m == nil || m.Item() == nil {
+							t.Error("nil message or item")
+							return
+						}
+						next, ok := seen[m.Name()]
+						if !ok || m.Item().Value != next {
+							t.Errorf("queue %q: got value %d, want %d", m.Name(), m.Item().Value, next)
+							return
+						}
+						seen[m.Name()]++
+						if err := gq.UpdateIndex(m); err != nil {
+							t.Errorf("update index: %v", err)
+							return
+						}
 						q, err := gq.getQueue(m.Name())
 						if err != nil {
 							t.Errorf("unexpected error state: %v", err)
@@ -740,6 +1237,11 @@ func TestGroupBulkDequeue(t *testing.T) {
 				return
 			}
 			dwg.Wait()
+			for name, count := range seen {
+				if count != tt.enqueueNums {
+					t.Errorf("queue %q: got %d messages, want %d", name, count, tt.enqueueNums)
+				}
+			}
 			err = gq.CloseIndex()
 			if err != nil {
 				t.Errorf("unexpected error state: %v", err)
@@ -803,7 +1305,9 @@ func TestGroupFuncAfterDequeue(t *testing.T) {
 				for {
 					err := gq.FuncAfterDequeue(tt.f)
 					if tt.name == "func error" {
-						// nothing to do
+						if err == nil {
+							t.Error("callback error was not returned")
+						}
 						break
 					} else {
 						if err != nil {
@@ -933,7 +1437,9 @@ func TestGroupFuncAfterBulkDequeue(t *testing.T) {
 				for {
 					_, err := gq.FuncAfterBulkDequeue(tt.size, tt.lazy, tt.f)
 					if tt.name == "func error" {
-						// nothing to do
+						if err == nil {
+							t.Error("callback error was not returned")
+						}
 						break
 					} else {
 						if err != nil {
@@ -1026,8 +1532,8 @@ func TestGroupAddQueue(t *testing.T) {
 	gq.CloseQueue()
 
 	err = gq.Enqueue("4", &TestData{Value: 4})
-	if err.Error() != "already closed" {
-		t.Errorf("want already closed")
+	if !IsErrQueueClose(err) {
+		t.Errorf("want queue close error, got %v", err)
 		return
 	}
 }
@@ -1091,5 +1597,417 @@ func TestGroupQueueLength(t *testing.T) {
 	}
 	if total != 2 {
 		t.Errorf("total got = %d, want = %d", total, 2)
+	}
+}
+
+// Recovery and child queue coordination.
+
+func TestGroupMultipleChildrenRecoveryBeyondBuffer(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"a", "b", "c"} {
+		q, err := NewQueue[int](name, WithFileDir(filepath.Join(dir, name)), WithQueueSize(2), WithMaxPage(3))
+		if err != nil {
+			t.Fatal(err)
+		}
+		q.WaitInitialize()
+		v := 0
+		if err := q.Enqueue(&v); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := q.Dequeue(); err != nil {
+			t.Fatal(err)
+		}
+		for _, value := range []int{1, 2} {
+			v := value
+			if err := q.Enqueue(&v); err != nil {
+				t.Fatal(err)
+			}
+		}
+		q.CloseQueue()
+		q.CloseIndex()
+	}
+	gq, err := NewGroupQueue[int]("g", WithFileDir(dir), WithQueueSize(2), WithMaxPage(3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	got := make(map[string][]int)
+	go func() {
+		for {
+			batch, err := gq.BulkDequeue(50, 10*time.Millisecond)
+			if IsErrQueueClose(err) {
+				done <- gq.CloseIndex()
+				return
+			}
+			if err != nil {
+				done <- err
+				return
+			}
+			for _, m := range batch {
+				got[m.Name()] = append(got[m.Name()], *m.Item())
+				if err := gq.UpdateIndex(m); err != nil {
+					done <- err
+					return
+				}
+			}
+		}
+	}()
+	initialized := make(chan error, 1)
+	go func() { initialized <- gq.waitInitialize() }()
+	select {
+	case err := <-initialized:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		gq.CloseQueue()
+		t.Fatal("multiple-child recovery blocked")
+	}
+	if err := gq.CloseQueue(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a", "b", "c"} {
+		if !reflect.DeepEqual(got[name], []int{0, 1, 2}) {
+			t.Fatalf("%s: %v", name, got[name])
+		}
+	}
+}
+
+func TestGroupRecoveryBeyondBuffer(t *testing.T) {
+	for _, size := range []uint64{1, 2, 2048} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			dir := t.TempDir()
+			q, err := NewQueue[int]("child", WithFileDir(filepath.Join(dir, "child")), WithQueueSize(size), WithMaxPage(3))
+			if err != nil {
+				t.Fatal(err)
+			}
+			q.WaitInitialize()
+			v := 0
+			if err := q.Enqueue(&v); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := q.Dequeue(); err != nil {
+				t.Fatal(err)
+			} // one interrupted message
+			for i := 1; i <= int(size); i++ {
+				v := i
+				if err := q.Enqueue(&v); err != nil {
+					t.Fatal(err)
+				}
+			}
+			q.CloseQueue()
+			q.CloseIndex()
+			gq, err := NewGroupQueue[int]("g", WithFileDir(dir), WithQueueSize(size), WithMaxPage(3))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []int
+			done := make(chan error, 1)
+			go func() {
+				for {
+					messages, err := gq.BulkDequeue(50, 10*time.Millisecond)
+					if IsErrQueueClose(err) {
+						done <- gq.CloseIndex()
+						return
+					}
+					if err != nil {
+						done <- err
+						return
+					}
+					for _, m := range messages {
+						got = append(got, *m.Item())
+						if err := gq.UpdateIndex(m); err != nil {
+							done <- err
+							return
+						}
+					}
+				}
+			}()
+			initialized := make(chan error, 1)
+			go func() { initialized <- gq.waitInitialize() }()
+			select {
+			case err := <-initialized:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(5 * time.Second):
+				gq.CloseQueue()
+				t.Fatal("group recovery did not complete")
+			}
+			if err := gq.CloseQueue(); err != nil {
+				t.Fatal(err)
+			}
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			want := make([]int, int(size)+1)
+			for i := range want {
+				want[i] = i
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("restored %d of %d messages", len(got), len(want))
+			}
+			if err := gq.waitInitialize(); err != nil {
+				t.Fatal("repeated wait:", err)
+			}
+		})
+	}
+}
+
+func TestGroupInitializationFailureAndEmptyClose(t *testing.T) {
+	for _, invalid := range []bool{false, true} {
+		t.Run(fmt.Sprint(invalid), func(t *testing.T) {
+			dir := t.TempDir()
+			if invalid {
+				if err := os.Mkdir(filepath.Join(dir, "bad"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "bad", "queue.0"), []byte("["), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			gq, err := NewGroupQueue[int]("g", WithFileDir(dir))
+			if err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() { _, err := gq.Dequeue(); done <- err }()
+			err = gq.waitInitialize()
+			if invalid && !isRecoveryFailure(err) || !invalid && err != nil {
+				t.Fatalf("initialization: %v", err)
+			}
+			if err := gq.CloseQueue(); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case err := <-done:
+				if invalid && !isRecoveryFailure(err) || !invalid && !IsErrQueueClose(err) {
+					t.Fatalf("dequeue: %v", err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("group consumer was not released")
+			}
+			if err := gq.CloseIndex(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestGroupConcurrentCreationOfSameChild(t *testing.T) {
+	gq, err := NewGroupQueue[int]("g", WithFileDir(t.TempDir()), WithQueueSize(8), WithQueueType(MPSC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		count := 0
+		seen := make([]bool, 80)
+		next := make([]int, 8)
+		for {
+			m, err := gq.Dequeue()
+			if IsErrQueueClose(err) {
+				if count != 80 {
+					done <- fmt.Errorf("got %d messages", count)
+					return
+				}
+				done <- gq.CloseIndex()
+				return
+			}
+			if err != nil {
+				done <- err
+				return
+			}
+			value := *m.Item()
+			if value < 0 || value >= len(seen) || seen[value] {
+				done <- fmt.Errorf("duplicate or invalid value %d", value)
+				return
+			}
+			producer := value / 10
+			if value%10 != next[producer] {
+				done <- fmt.Errorf("producer %d: out of order value %d", producer, value)
+				return
+			}
+			seen[value] = true
+			next[producer]++
+			if err := gq.UpdateIndex(m); err != nil {
+				done <- err
+				return
+			}
+			count++
+		}
+	}()
+	if err := gq.waitInitialize(); err != nil {
+		t.Fatal(err)
+	}
+	var producers sync.WaitGroup
+	for producer := 0; producer < 8; producer++ {
+		producers.Add(1)
+		go func(producer int) {
+			defer producers.Done()
+			for i := 0; i < 10; i++ {
+				v := producer*10 + i
+				if err := gq.Enqueue("child", &v); err != nil {
+					t.Error(err)
+					return
+				}
+			}
+		}(producer)
+	}
+	producers.Wait()
+	if got := atomic.LoadUint32(&gq.queueCount); got != 1 {
+		t.Fatalf("created %d children", got)
+	}
+	if err := gq.CloseQueue(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGroupCapacityDoesNotRemoveExistingDirectory(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"a", "b"} {
+		if err := os.Mkdir(filepath.Join(dir, name), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name, "queue.0"), []byte("[1]\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gq, err := NewGroupQueue[int]("g", WithFileDir(dir), WithGroupSize(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gq.waitInitialize(); err == nil {
+		t.Fatal("excess children accepted")
+	}
+	gq.CloseQueue()
+	gq.CloseIndex()
+	for _, name := range []string{"a", "b"} {
+		got, err := os.ReadFile(filepath.Join(dir, name, "queue.0"))
+		if err != nil || string(got) != "[1]\n" {
+			t.Fatalf("changed existing child %s", name)
+		}
+	}
+}
+
+func TestGroupFailureCancelsOtherRecovery(t *testing.T) {
+	dir := t.TempDir()
+	q, err := NewQueue[int]("a", WithFileDir(filepath.Join(dir, "a")), WithQueueSize(2), WithMaxPage(3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	q.WaitInitialize()
+	v := 0
+	if err := q.Enqueue(&v); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.Dequeue(); err != nil {
+		t.Fatal(err)
+	}
+	a, b := 1, 2
+	if err := q.BulkEnqueue([]*int{&a, &b}); err != nil {
+		t.Fatal(err)
+	}
+	q.CloseQueue()
+	q.CloseIndex()
+	if err := os.Mkdir(filepath.Join(dir, "z"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "z", "queue.0"), []byte("["), 0600); err != nil {
+		t.Fatal(err)
+	}
+	gq, err := NewGroupQueue[int]("g", WithFileDir(dir), WithQueueSize(2), WithMaxPage(3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	// No consumer is needed to discover the failing child. Otherwise the first
+	// child's full replay buffer could hide the second child's failure forever.
+	go func() { done <- gq.waitInitialize() }()
+	select {
+	case err := <-done:
+		if !isRecoveryFailure(err) {
+			t.Fatalf("error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		gq.CloseQueue()
+		t.Fatal("another child hid initialization failure")
+	}
+	gq.CloseQueue()
+	gq.CloseIndex()
+	q, err = NewQueue[int]("a", WithFileDir(filepath.Join(dir, "a")), WithQueueSize(2), WithMaxPage(3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := collectRecovered(t, q); !reflect.DeepEqual(got, []int{0, 1, 2}) {
+		t.Fatal(got)
+	}
+}
+
+func TestGroupIOFailureReleasesOtherProducer(t *testing.T) {
+	dir := t.TempDir()
+	gq, err := NewGroupQueue[int]("g", WithFileDir(dir), WithQueueSize(2), WithMaxPage(3), WithQueueType(MPSC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gq.waitInitialize(); err != nil {
+		t.Fatal(err)
+	}
+	v := 0
+	if err := gq.Enqueue("a", &v); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []int{10, 11} {
+		v := value
+		if err := gq.Enqueue("b", &v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	producer := make(chan error, 1)
+	go func() { v := 12; producer <- gq.Enqueue("b", &v) }()
+	waitForQueueFunction(t, "publish")
+	a, err := gq.getQueue("a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := a.Dequeue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.indexFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gq.UpdateIndex(m); !isIOFailure(err) {
+		t.Fatalf("index failure: %v", err)
+	}
+	select {
+	case err := <-producer:
+		if !isIOFailure(err) {
+			t.Fatalf("producer: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("another child's producer stayed blocked")
+	}
+	if err := gq.CloseQueue(); err != nil {
+		t.Fatal(err)
+	}
+	gq.CloseIndex() // a's descriptor was deliberately closed by the fault injection
+	for _, tc := range []struct {
+		name string
+		want []int
+	}{{"a", []int{0}}, {"b", []int{10, 11, 12}}} {
+		q, err := NewQueue[int](tc.name, WithFileDir(filepath.Join(dir, tc.name)), WithQueueSize(2), WithMaxPage(3))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := collectRecovered(t, q); !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("%s: %v", tc.name, got)
+		}
 	}
 }
