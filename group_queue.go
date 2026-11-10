@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
@@ -33,7 +32,10 @@ type GroupQueue[T any] struct {
 	initializeBlock chan struct{}                  // Channel used to block until initialization is complete.
 	enqueueSig      chan struct{}                  // Signal channel to notify enqueue operations.
 	closeSig        chan struct{}                  // Signal channel to notify that the group queue is closed.
-	mu              sync.RWMutex                   // Mutex to synchronize access to the group's queues.
+	failureSig      chan struct{}
+	failure         atomic.Pointer[queueFailure]
+	addMu           sync.Mutex
+	mu              sync.RWMutex // Mutex to synchronize access to the group's queues.
 }
 
 // NewGroupQueue initializes a new GroupQueue with the given name and optional settings.
@@ -49,7 +51,7 @@ type GroupQueue[T any] struct {
 //
 // Example:
 //
-//	// Create a group queue for Data items with a queue size of 1024 and up to 5 pages.
+//	// Create a group queue for Data items with a queue size of 1024 and 2 pages.
 //	gq, err := ffq.NewGroupQueue[Data]("myGroupQueue",
 //	     ffq.WithQueueSize(1024),
 //	     ffq.WithMaxPage(2),
@@ -58,8 +60,10 @@ type GroupQueue[T any] struct {
 //	if err != nil {
 //	    log.Fatalf("Failed to create group queue: %v", err)
 //	}
-//	// Wait until the group queue is fully initialized before use.
-//	gq.WaitInitialize()
+//	// Start the consumer first, then check initialization before starting producers.
+//	if err := gq.WaitInitializeWithError(); err != nil {
+//	    log.Fatal(err)
+//	}
 func NewGroupQueue[T any](name string, opts ...Option) (*GroupQueue[T], error) {
 	var err error
 
@@ -111,6 +115,9 @@ func NewGroupQueue[T any](name string, opts ...Option) (*GroupQueue[T], error) {
 		decoder = *options.decoder
 	}
 
+	if groupSize < 1 || size > uint64(int(^uint(0)>>1)) || maxPage > uint64(int(^uint(0)>>1)) || size > ^uint64(0)/maxPage || (queueType != SPSC && queueType != MPSC) || encoder == nil || decoder == nil {
+		return nil, fmt.Errorf("%w: invalid group configuration", ErrQueueOption)
+	}
 	queues := make([]*Queue[T], groupSize)
 	enqueueSig := make(chan struct{}, 1)
 	closeSig := make(chan struct{}, 1)
@@ -132,6 +139,7 @@ func NewGroupQueue[T any](name string, opts ...Option) (*GroupQueue[T], error) {
 		initializeBlock: make(chan struct{}),
 		enqueueSig:      enqueueSig,
 		closeSig:        closeSig,
+		failureSig:      make(chan struct{}),
 	}
 
 	gq.isClose.Store(false)
@@ -144,38 +152,66 @@ func NewGroupQueue[T any](name string, opts ...Option) (*GroupQueue[T], error) {
 }
 
 func (gq *GroupQueue[T]) addQueue(name string) error {
-	if gq.isClose.Load() {
-		return fmt.Errorf("already closed")
-	}
-	q, err := NewQueue[T](
-		name,
-		WithFileDir(filepath.Join(gq.fileDir, name)),
-		WithMaxPage(gq.maxPage),
-		WithQueueSize(gq.size),
-		WithEncoder(gq.encoder),
-		WithDecoder(gq.decoder),
-		WithQueueType(gq.queueType),
-	)
+	q, err := gq.registerQueue(name)
 	if err != nil {
 		return err
 	}
-	queueCount := atomic.AddUint32(&gq.queueCount, 1)
-	if int(queueCount) > gq.groupSize {
-		q.mu.Lock()
-		q.WaitInitialize()
-		os.RemoveAll(q.fileDir)
-		q.mu.Unlock()
-		return fmt.Errorf("reached group queue max size, %d", gq.groupSize)
+	return gq.awaitChild(q)
+}
+
+func (gq *GroupQueue[T]) registerQueue(name string) (*Queue[T], error) {
+	gq.addMu.Lock()
+	defer gq.addMu.Unlock()
+	if gq.isClose.Load() {
+		return nil, ErrQueueClose
 	}
-	gq.nameIndices.Store(name, queueCount-1)
+	if failure := gq.failure.Load(); failure != nil {
+		return nil, failure.err
+	}
+	if q, err := gq.getQueue(name); err == nil {
+		return q, nil
+	}
+	if int(atomic.LoadUint32(&gq.queueCount)) >= gq.groupSize {
+		return nil, fmt.Errorf("reached group queue max size, %d", gq.groupSize)
+	}
+	q, err := newQueue[T](name, gq, WithFileDir(filepath.Join(gq.fileDir, name)), WithMaxPage(gq.maxPage), WithQueueSize(gq.size), WithEncoder(gq.encoder), WithDecoder(gq.decoder), WithQueueType(gq.queueType))
+	if err != nil {
+		return nil, err
+	}
 	gq.mu.Lock()
-	gq.queues[queueCount-1] = q
+	if failure := gq.failure.Load(); failure != nil {
+		gq.mu.Unlock()
+		q.CloseQueue()
+		q.CloseIndex()
+		return nil, failure.err
+	}
+	if gq.isClose.Load() {
+		gq.mu.Unlock()
+		q.CloseQueue()
+		q.CloseIndex()
+		return nil, ErrQueueClose
+	}
+	index := atomic.LoadUint32(&gq.queueCount)
+	gq.queues[index] = q
+	gq.nameIndices.Store(name, index)
+	atomic.AddUint32(&gq.queueCount, 1)
 	gq.mu.Unlock()
-	q.WaitInitialize()
-	if q.Length() > 0 {
+	if q.Length() > 0 || q.failure.Load() != nil {
 		gq.signalEnqueue()
 	}
-	return nil
+	return q, nil
+}
+
+func (gq *GroupQueue[T]) awaitChild(q *Queue[T]) error {
+	select {
+	case <-q.initializeBlock:
+		if failure := gq.failure.Load(); failure != nil {
+			return failure.err
+		}
+		return q.initErr
+	case <-gq.failureSig:
+		return gq.failure.Load().err
+	}
 }
 
 // Enqueue adds a single item to the queue identified by the given name.
@@ -196,6 +232,12 @@ func (gq *GroupQueue[T]) addQueue(name string) error {
 //	    log.Fatalf("Enqueue failed: %v", err)
 //	}
 func (gq *GroupQueue[T]) Enqueue(name string, item *T) error {
+	if failure := gq.failure.Load(); failure != nil {
+		return failure.err
+	}
+	if gq.isClose.Load() {
+		return ErrQueueClose
+	}
 	var err error
 	q, err := gq.getQueue(name)
 	if err != nil {
@@ -234,6 +276,12 @@ func (gq *GroupQueue[T]) Enqueue(name string, item *T) error {
 //	    log.Fatalf("BulkEnqueue failed: %v", err)
 //	}
 func (gq *GroupQueue[T]) BulkEnqueue(name string, items []*T) error {
+	if failure := gq.failure.Load(); failure != nil {
+		return failure.err
+	}
+	if gq.isClose.Load() {
+		return ErrQueueClose
+	}
 	var err error
 	q, err := gq.getQueue(name)
 	if err != nil {
@@ -246,6 +294,9 @@ func (gq *GroupQueue[T]) BulkEnqueue(name string, items []*T) error {
 	var i uint64
 	itemLength := uint64(len(items))
 	for i < itemLength {
+		if failure := gq.failure.Load(); failure != nil {
+			return failure.err
+		}
 		var next uint64 = i + q.size - q.Length()
 		if next == i {
 			time.Sleep(30 * time.Microsecond)
@@ -286,12 +337,15 @@ func (gq *GroupQueue[T]) Dequeue() (*Message[T], error) {
 	for {
 		err := gq.checkQueueSignal()
 		if err != nil {
-			return nil, ErrQueueClose
+			return nil, err
 		}
 		q, _ := gq.getActiveQueue()
+		if q == nil {
+			continue
+		}
 		m, err := q.Dequeue()
 		gq.signalEnqueue()
-		if m != nil {
+		if m != nil || err != nil && !IsErrQueueClose(err) {
 			return m, err
 		}
 		gq.manageQueueClose()
@@ -302,7 +356,7 @@ func (gq *GroupQueue[T]) Dequeue() (*Message[T], error) {
 // returning a batch of messages once the specified size is reached or after the lazy duration expires.
 //
 // Parameters:
-//   - size: The number of items to dequeue in one batch.
+//   - size: The maximum number of items to dequeue in one batch. Zero returns ErrQueueOption without consuming messages.
 //   - lazy: The duration to wait between dequeue attempts before returning the batch.
 //
 // Returns:
@@ -320,18 +374,31 @@ func (gq *GroupQueue[T]) Dequeue() (*Message[T], error) {
 //	    fmt.Printf("Dequeued message: %+v\n", msg)
 //	}
 func (gq *GroupQueue[T]) BulkDequeue(size uint64, lazy time.Duration) ([]*Message[T], error) {
-	err := gq.checkQueueSignal()
-	if err != nil {
-		return nil, ErrQueueClose
+	if size == 0 {
+		return nil, fmt.Errorf("%w: bulk size must be greater than 0", ErrQueueOption)
+	}
+	var err error
+	var count uint32
+	for count == 0 {
+		err = gq.checkQueueSignal()
+		if err != nil {
+			return nil, err
+		}
+		count = atomic.LoadUint32(&gq.queueCount)
 	}
 
 	// add enqueueSignal because get enqueueSignal first
 	ms := make([]*Message[T], 0, size)
-	batch := size / uint64(atomic.LoadUint32(&gq.queueCount))
+	batch := size / uint64(count)
+	if batch == 0 {
+		batch = 1
+	}
 	gq.signalEnqueue() // use next time select case
 	timer := time.After(lazy)
 	for {
 		select {
+		case <-gq.failureSig:
+			return ms, gq.failure.Load().err
 		case <-timer:
 			return ms, nil
 		case <-gq.closeSig:
@@ -346,8 +413,20 @@ func (gq *GroupQueue[T]) BulkDequeue(size uint64, lazy time.Duration) ([]*Messag
 			}
 
 			q, _ := gq.getActiveQueue()
+			if q == nil {
+				continue
+			}
 			n := batch
-			qlen := int(q.Length() + 1) // if q.Length() == 0, queue may be closed.
+			qlen := int(q.Length())
+			if qlen == 0 {
+				_, dequeueErr := q.Dequeue()
+				if dequeueErr != nil && !IsErrQueueClose(dequeueErr) {
+					return ms, dequeueErr
+				}
+				gq.manageQueueClose()
+				gq.signalEnqueue()
+				continue
+			}
 			if newN := uint64(qlen); newN < n {
 				n = newN
 			}
@@ -355,7 +434,10 @@ func (gq *GroupQueue[T]) BulkDequeue(size uint64, lazy time.Duration) ([]*Messag
 				n = newN
 			}
 			for i := uint64(0); i < n; i++ {
-				m, _ := q.Dequeue()
+				m, dequeueErr := q.Dequeue()
+				if dequeueErr != nil && !IsErrQueueClose(dequeueErr) {
+					return nil, dequeueErr
+				}
 				if m != nil {
 					ms = append(ms, m)
 				} else {
@@ -394,10 +476,16 @@ func (gq *GroupQueue[T]) FuncAfterDequeue(f func(*T) error) error {
 	for {
 		err := gq.checkQueueSignal()
 		if err != nil {
-			return ErrQueueClose
+			return err
 		}
 		q, _ := gq.getActiveQueue()
-		m, _ := q.Dequeue()
+		if q == nil {
+			continue
+		}
+		m, dequeueErr := q.Dequeue()
+		if dequeueErr != nil && !IsErrQueueClose(dequeueErr) {
+			return dequeueErr
+		}
 		gq.signalEnqueue()
 		if m != nil {
 			var err error
@@ -405,7 +493,7 @@ func (gq *GroupQueue[T]) FuncAfterDequeue(f func(*T) error) error {
 			if fErr != nil {
 				err = errors.Join(err, fErr)
 			}
-			iErr := q.writeIndex(m.index)
+			iErr := q.UpdateIndex(m)
 			if iErr != nil {
 				err = errors.Join(err, iErr)
 			}
@@ -419,7 +507,7 @@ func (gq *GroupQueue[T]) FuncAfterDequeue(f func(*T) error) error {
 // Once the batch is processed, it updates the indices of the corresponding queues.
 //
 // Parameters:
-//   - size: The maximum number of items to dequeue in one batch.
+//   - size: The maximum number of items to dequeue in one batch. Zero returns ErrQueueOption without invoking f.
 //   - lazy: The duration to wait between dequeue attempts before processing the batch.
 //   - f: A function that processes the batch of data items.
 //     It should return an error if processing fails.
@@ -439,20 +527,33 @@ func (gq *GroupQueue[T]) FuncAfterDequeue(f func(*T) error) error {
 //	}
 //	fmt.Printf("Processed %d items\n", count)
 func (gq *GroupQueue[T]) FuncAfterBulkDequeue(size uint64, lazy time.Duration, f func([]*T) error) (int, error) {
-	err := gq.checkQueueSignal()
-	if err != nil {
-		return 0, ErrQueueClose
+	if size == 0 {
+		return 0, fmt.Errorf("%w: bulk size must be greater than 0", ErrQueueOption)
+	}
+	var err error
+	var count uint32
+	for count == 0 {
+		err = gq.checkQueueSignal()
+		if err != nil {
+			return 0, err
+		}
+		count = atomic.LoadUint32(&gq.queueCount)
 	}
 
 	// add enqueueSignal because get enqueueSignal first
 	items := make([]*T, 0, size)
-	batch := size / uint64(atomic.LoadUint32(&gq.queueCount))
+	batch := size / uint64(count)
+	if batch == 0 {
+		batch = 1
+	}
 	gq.signalEnqueue() // next time select case
-	lastIndexMap := make(map[uint32]uint64, gq.maxPage)
+	lastMessageMap := make(map[uint32]*Message[T], gq.maxPage)
 	timer := time.After(lazy)
 LOOP:
 	for {
 		select {
+		case <-gq.failureSig:
+			return 0, gq.failure.Load().err
 		case <-timer:
 			break LOOP
 		case <-gq.closeSig:
@@ -467,8 +568,20 @@ LOOP:
 			}
 
 			q, activeQueue := gq.getActiveQueue()
+			if q == nil {
+				continue
+			}
 			n := batch
-			qlen := int(q.Length() + 1) // if q.Length() == 0, queue may be closed.
+			qlen := int(q.Length())
+			if qlen == 0 {
+				_, dequeueErr := q.Dequeue()
+				if dequeueErr != nil && !IsErrQueueClose(dequeueErr) {
+					return 0, dequeueErr
+				}
+				gq.manageQueueClose()
+				gq.signalEnqueue()
+				continue
+			}
 			if newN := uint64(qlen); newN < n {
 				n = newN
 			}
@@ -476,10 +589,13 @@ LOOP:
 				n = newN
 			}
 			for i := uint64(0); i < n; i++ {
-				m, _ := q.Dequeue()
+				m, dequeueErr := q.Dequeue()
+				if dequeueErr != nil && !IsErrQueueClose(dequeueErr) {
+					return 0, dequeueErr
+				}
 				if m != nil {
 					items = append(items, m.item)
-					lastIndexMap[activeQueue] = m.index
+					lastMessageMap[activeQueue] = m
 				} else {
 					gq.manageQueueClose()
 				}
@@ -494,14 +610,14 @@ LOOP:
 	if fErr != nil {
 		err = errors.Join(err, fErr)
 	}
-	for i, index := range lastIndexMap {
+	for i, message := range lastMessageMap {
 		q := gq.queues[i]
-		iErr := q.writeIndex(index)
+		iErr := q.UpdateIndex(message)
 		if iErr != nil {
 			err = errors.Join(err, iErr)
 		}
 	}
-	return len(items), nil
+	return len(items), err
 }
 
 // Length returns the lengths of each individual queue in the group as well as the total number
@@ -516,6 +632,8 @@ LOOP:
 //	lengths, total := gq.Length()
 //	fmt.Printf("Queue lengths: %v, Total items: %d\n", lengths, total)
 func (gq *GroupQueue[T]) Length() ([]uint64, uint64) {
+	gq.mu.RLock()
+	defer gq.mu.RUnlock()
 	qls := make([]uint64, 0, gq.groupSize)
 	var total uint64 = 0
 	for _, q := range gq.queues {
@@ -530,58 +648,75 @@ func (gq *GroupQueue[T]) Length() ([]uint64, uint64) {
 }
 
 func (gq *GroupQueue[T]) initialize() {
+	defer close(gq.initializeBlock)
 	entries, err := os.ReadDir(gq.fileDir)
 	if err != nil {
-		panic(fmt.Sprintf("could not find directory, %s, %v", gq.fileDir, err))
+		gq.fail(fmt.Errorf("initialize group queue: cannot list directory"))
+		return
 	}
-
-	var wg sync.WaitGroup
-
+	count := 0
 	for _, entry := range entries {
 		if entry.IsDir() {
-			wg.Add(1)
-			go func(wg *sync.WaitGroup, entry fs.DirEntry) {
-				defer wg.Done()
-				gq.addQueue(entry.Name())
-			}(&wg, entry)
+			count++
 		}
 	}
-	// wait goroutine
+	if count > gq.groupSize {
+		gq.fail(fmt.Errorf("initialize group queue: reached max size"))
+		return
+	}
+	var wg sync.WaitGroup
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		wg.Add(1)
+		go func(name string) {
+			defer wg.Done()
+			if err := gq.addQueue(name); err != nil {
+				gq.fail(err)
+			}
+		}(entry.Name())
+	}
 	wg.Wait()
-
-	// release blocking
-	gq.initializeBlock <- struct{}{}
 }
 
 // WaitInitialize blocks until the group queue has completed its initialization process.
-// This ensures that all individual queues have been set up (for example, by reading existing data files)
-// before the group queue is used.
+// Start the consumer before waiting and start producers afterward.
+// This method does not report initialization failures. Use WaitInitializeWithError
+// when startup must check the initialization result.
 //
 // Example:
 //
-//	// Create a new group queue and wait for initialization to complete.
-//	gq, err := ffq.NewGroupQueue[Data]("myGroupQueue", ffq.WithQueueSize(1024))
-//	if err != nil {
-//	    log.Fatalf("Failed to create group queue: %v", err)
-//	}
+//	// Start the consumer before waiting for initialization to complete.
 //	gq.WaitInitialize()
-//	// Now it is safe to start enqueuing and dequeuing items.
-//	go func() {
-//	    for {
-//	        msg, err := gq.Dequeue()
-//	        if err != nil {
-//	            log.Println("Dequeue error:", err)
-//	            break
-//	        }
-//	        fmt.Println("Dequeued:", msg)
-//	    }
-//	}()
-//	// Enqueue data into the group queue.
-//	if err := gq.Enqueue("queue1", &dataItem); err != nil {
-//	    log.Fatal(err)
-//	}
+//	// Completion alone does not indicate success; check operation errors.
 func (gq *GroupQueue[T]) WaitInitialize() {
 	<-gq.initializeBlock
+}
+
+// WaitInitializeWithError waits for group initialization to finish, then returns
+// a recorded failure or ErrQueueClose if the group is closed. Start the consumer
+// before waiting. On success, the children discovered at startup are initialized;
+// children created by later enqueues still initialize separately.
+// A nil result does not guarantee that later operations will succeed or that
+// recovered messages have finished processing. Continue checking operation errors.
+// A failure does not guarantee that all child I/O has stopped.
+//
+// Example:
+//
+//	// Start the consumer first. Start producers only after this succeeds.
+//	if err := gq.WaitInitializeWithError(); err != nil {
+//	    panic(err)
+//	}
+func (gq *GroupQueue[T]) WaitInitializeWithError() error {
+	<-gq.initializeBlock
+	if failure := gq.failure.Load(); failure != nil {
+		return failure.err
+	}
+	if gq.isClose.Load() {
+		return ErrQueueClose
+	}
+	return nil
 }
 
 func (gq *GroupQueue[T]) signalEnqueue() {
@@ -599,12 +734,13 @@ func (gq *GroupQueue[T]) signalClose() {
 }
 
 func (gq *GroupQueue[T]) getQueue(name string) (*Queue[T], error) {
+	// Each slot is immutable after registration. Store publishes the slot
+	// before its index is made visible through nameIndices.Load.
 	i, ok := gq.nameIndices.Load(name)
 	if !ok {
-		return nil, fmt.Errorf("queue name: %s, %v", name, ErrQueueNotFound)
+		return nil, fmt.Errorf("queue name: %s, %w", name, ErrQueueNotFound)
 	}
-	q := gq.queues[i.(uint32)]
-	return q, nil
+	return gq.queues[i.(uint32)], nil
 }
 
 // CloseQueue closes all individual queues within the group and signals that no further enqueues are allowed.
@@ -618,17 +754,18 @@ func (gq *GroupQueue[T]) getQueue(name string) (*Queue[T], error) {
 //	    log.Fatalf("CloseQueue failed: %v", err)
 //	}
 func (gq *GroupQueue[T]) CloseQueue() error {
-	var err error
+	gq.mu.Lock()
 	gq.isClose.Store(true)
-	for _, q := range gq.queues {
-		if q == nil {
-			break
-		}
-		closeErr := q.CloseQueue()
-		if err != nil {
-			err = errors.Join(err, closeErr)
-		}
+	queues := append([]*Queue[T](nil), gq.queues[:atomic.LoadUint32(&gq.queueCount)]...)
+	gq.mu.Unlock()
+	var err error
+	for _, q := range queues {
+		err = errors.Join(err, q.CloseQueue())
 	}
+	if len(queues) == 0 {
+		gq.signalClose()
+	}
+	gq.signalEnqueue()
 	return err
 }
 
@@ -651,15 +788,12 @@ func (gq *GroupQueue[T]) manageQueueClose() {
 //	    log.Fatalf("CloseIndex failed: %v", err)
 //	}
 func (gq *GroupQueue[T]) CloseIndex() error {
+	gq.mu.RLock()
+	queues := append([]*Queue[T](nil), gq.queues[:atomic.LoadUint32(&gq.queueCount)]...)
+	gq.mu.RUnlock()
 	var err error
-	for _, q := range gq.queues {
-		if q == nil {
-			break
-		}
-		if q.isQueueClosed.Load() && !q.isIndexClosed.Load() {
-			err = q.CloseIndex()
-			atomic.AddUint32(&gq.closeCount, 1)
-		}
+	for _, q := range queues {
+		err = errors.Join(err, q.CloseIndex())
 	}
 	return err
 }
@@ -679,53 +813,48 @@ func (gq *GroupQueue[T]) CloseIndex() error {
 //	    log.Fatalf("UpdateIndex failed: %v", err)
 //	}
 func (gq *GroupQueue[T]) UpdateIndex(m *Message[T]) error {
-	var err error
-	q, gqErr := gq.getQueue(m.name)
-	if gqErr != nil {
-		err = errors.Join(err, gqErr)
+	if m == nil {
+		return fmt.Errorf("queue progress: nil message")
 	}
-	iErr := q.writeIndex(m.index)
-	if iErr != nil {
-		err = errors.Join(err, iErr)
+	q, err := gq.getQueue(m.Name())
+	if err != nil {
+		return err
 	}
-	return err
+	return q.UpdateIndex(m)
 }
 
 func (gq *GroupQueue[T]) getActiveQueue() (*Queue[T], uint32) {
-	activeQueue := atomic.LoadUint32(&gq.activeQueue)
-	startActiveQueue := activeQueue
-	for {
-		gq.mu.RLock()
-		q := gq.queues[activeQueue]
-		gq.mu.RUnlock()
-		if q == nil {
-			activeQueue = 0
-			continue
-		}
-		if !q.isQueueClosedRecieved.Load() && (q.Length() > 0 || q.isQueueClosed.Load()) {
-			if activeQueue == uint32(gq.groupSize-1) {
-				atomic.StoreUint32(&gq.activeQueue, 0)
-			} else {
-				atomic.StoreUint32(&gq.activeQueue, activeQueue+1)
-			}
-			return q, activeQueue
-		}
-		if activeQueue == uint32(gq.groupSize-1) {
-			activeQueue = 0
-		} else {
-			activeQueue++
-		}
-		if activeQueue == startActiveQueue {
-			time.Sleep(30 * time.Microsecond)
+	gq.mu.RLock()
+	defer gq.mu.RUnlock()
+	count := atomic.LoadUint32(&gq.queueCount)
+	if count == 0 {
+		return nil, 0
+	}
+	start := atomic.LoadUint32(&gq.activeQueue) % count
+	for offset := uint32(0); offset < count; offset++ {
+		i := (start + offset) % count
+		q := gq.queues[i]
+		if q.Length() > 0 || q.failure.Load() != nil || q.isQueueClosed.Load() && !q.isQueueClosedRecieved.Load() {
+			atomic.StoreUint32(&gq.activeQueue, (i+1)%count)
+			return q, i
 		}
 	}
+	return nil, 0
 }
 
 func (gq *GroupQueue[T]) checkQueueSignal() error {
+	if failure := gq.failure.Load(); failure != nil {
+		return failure.err
+	}
 	select {
+	case <-gq.failureSig:
+		return gq.failure.Load().err
 	case <-gq.closeSig:
 		return ErrQueueClose
 	case <-gq.enqueueSig:
+		if failure := gq.failure.Load(); failure != nil {
+			return failure.err
+		}
 		select {
 		case <-gq.closeSig:
 			return ErrQueueClose
@@ -733,4 +862,20 @@ func (gq *GroupQueue[T]) checkQueueSignal() error {
 			return nil
 		}
 	}
+}
+
+func (gq *GroupQueue[T]) fail(err error) error {
+	if gq.failure.CompareAndSwap(nil, &queueFailure{err: err}) {
+		close(gq.failureSig)
+	}
+	gq.signalEnqueue()
+	return gq.failure.Load().err
+}
+
+func (gq *GroupQueue[T]) waitInitialize() error {
+	<-gq.initializeBlock
+	if failure := gq.failure.Load(); failure != nil {
+		return failure.err
+	}
+	return nil
 }

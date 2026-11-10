@@ -6,16 +6,16 @@ tasks:
     desc: run go test
     dir: "{{.ROOT_DIR}}"
     cmds:
-      - cmd: go test -v -shuffle=on -race -timeout 20s -coverprofile=coverage.out $(go list ./... | grep -v "examples")
-        ignore_error: true
+      - go test -v -shuffle=on -race -timeout 20s -coverprofile=coverage.out ./...
       - go tool cover -func=coverage.out
       - go tool cover -html=coverage.out -o coverage.html
     silent: true
 
   bench:
-    desc: run go benchmark
+    desc: run go benchmark against the current checkout
     dir: "{{.ROOT_DIR}}/bench"
     cmds:
+      - go list -m github.com/nihiyama/ffq
       - go test -benchmem -run=^$ -bench ^Benchmark .
     silent: true
 

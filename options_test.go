@@ -2,8 +2,87 @@ package ffq
 
 import (
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 )
+
+func TestBoundaryQueueOptions(t *testing.T) {
+	for _, grouped := range []bool{false, true} {
+		for _, tc := range []struct {
+			name      string
+			opts      []Option
+			invalid   bool
+			groupOnly bool
+		}{
+			{name: "minimum queue size", opts: []Option{WithQueueSize(1)}},
+			{name: "zero queue size", opts: []Option{WithQueueSize(0)}, invalid: true},
+			{name: "minimum pages", opts: []Option{WithMaxPage(2)}},
+			{name: "one page", opts: []Option{WithMaxPage(1)}, invalid: true},
+			{name: "zero pages", opts: []Option{WithMaxPage(0)}, invalid: true},
+			{name: "queue size exceeds int", opts: []Option{WithQueueSize(uint64(^uint(0)>>1) + 1)}, invalid: true},
+			{name: "page count exceeds int", opts: []Option{WithMaxPage(uint64(^uint(0)>>1) + 1)}, invalid: true},
+			{name: "capacity multiplication overflow", opts: []Option{WithQueueSize(^uint64(0) / 2), WithMaxPage(3)}, invalid: true},
+			{name: "maximum uint64 queue size", opts: []Option{WithQueueSize(^uint64(0))}, invalid: true},
+			{name: "maximum uint64 pages", opts: []Option{WithMaxPage(^uint64(0))}, invalid: true},
+			{name: "unknown queue type", opts: []Option{WithQueueType(QueueType("unknown"))}, invalid: true},
+			{name: "nil encoder", opts: []Option{WithEncoder(nil)}, invalid: true},
+			{name: "nil decoder", opts: []Option{WithDecoder(nil)}, invalid: true},
+			{name: "minimum group size", opts: []Option{WithGroupSize(1)}, groupOnly: true},
+			{name: "zero group size", opts: []Option{WithGroupSize(0)}, invalid: true, groupOnly: true},
+			{name: "negative group size", opts: []Option{WithGroupSize(-1)}, invalid: true, groupOnly: true},
+		} {
+			if tc.groupOnly && !grouped {
+				continue
+			}
+			t.Run(fmt.Sprintf("group=%t/%s", grouped, tc.name), func(t *testing.T) {
+				dir := t.TempDir()
+				marker := filepath.Join(dir, "retained-data")
+				if err := os.WriteFile(marker, []byte("retain"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				before := diskSnapshot(t, dir)
+				opts := append([]Option{WithFileDir(dir)}, tc.opts...)
+				var receiver boundaryReceiver
+				var err error
+				if grouped {
+					var group *GroupQueue[int]
+					group, err = NewGroupQueue[int]("g", opts...)
+					if err == nil {
+						receiver = group
+						group.WaitInitialize()
+					}
+				} else {
+					var queue *Queue[int]
+					queue, err = NewQueue[int]("q", opts...)
+					if err == nil {
+						receiver = queue
+						queue.WaitInitialize()
+					}
+				}
+				if receiver != nil {
+					defer receiver.CloseIndex()
+					defer receiver.CloseQueue()
+				}
+				if tc.invalid {
+					if !IsErrQueueOption(err) {
+						t.Fatalf("invalid options: %v", err)
+					}
+					if len(diskSnapshot(t, dir)) != len(before) {
+						t.Fatal("invalid configuration created queue files")
+					}
+				} else if err != nil {
+					t.Fatalf("valid minimum rejected: %v", err)
+				}
+				data, readErr := os.ReadFile(marker)
+				if readErr != nil || string(data) != "retain" {
+					t.Fatal("configuration validation modified existing data")
+				}
+			})
+		}
+	}
+}
 
 func TestWithFileDir(t *testing.T) {
 	dirName := "/tmp"

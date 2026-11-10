@@ -3,6 +3,8 @@ package ffq
 
 import (
 	"encoding/binary"
+	"fmt"
+	"io"
 	"os"
 )
 
@@ -28,28 +30,31 @@ func openIndexFile(indexFilepath string) (*os.File, error) {
 	return indexFile, err
 }
 
-func readIndex(indexFilepath string) *uint64 {
-	var err error
-	if _, err := os.Stat(indexFilepath); os.IsNotExist(err) {
-		return nil
-	}
-	indexFile, err := os.Open(indexFilepath)
-	if err != nil {
-		// if cannot open remove index file
-		os.Remove(indexFilepath)
-		return nil
-	}
-	defer indexFile.Close()
+func readIndex(path string) *uint64 { value, _ := loadQueueIndex(path); return value }
 
-	// uint64 size is 8
-	// | -- index(8) -- |
-	var index uint64
-	err = binary.Read(indexFile, binary.LittleEndian, &index)
-	if err != nil {
-		// if cannot read remove index file
-		os.Remove(indexFilepath)
-		return nil
+func loadQueueIndex(path string) (*uint64, error) {
+	stat, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return nil, nil
 	}
-
-	return &index
+	if err != nil {
+		return nil, fmt.Errorf("initialize queue: cannot inspect index")
+	}
+	if !stat.Mode().IsRegular() || (stat.Size() != 0 && stat.Size() != 8) {
+		return nil, fmt.Errorf("initialize queue: invalid index length or file type")
+	}
+	if stat.Size() == 0 {
+		return nil, nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("initialize queue: cannot read index")
+	}
+	defer f.Close()
+	var b [8]byte
+	if _, err := io.ReadFull(f, b[:]); err != nil {
+		return nil, fmt.Errorf("initialize queue: cannot read index")
+	}
+	value := binary.LittleEndian.Uint64(b[:])
+	return &value, nil
 }
